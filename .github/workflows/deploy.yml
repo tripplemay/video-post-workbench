@@ -1,0 +1,30 @@
+name: Deploy to VPS
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-vps
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: rsync site to VPS
+        env:
+          SSH_KEY: ${{ secrets.DEPOYSVR_SSH_KEY }}
+          VPS_HOST: ${{ secrets.DEPOYSVR_HOST }}
+          VPS_USER: ${{ secrets.DEPOYSVR_USER }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          rsync -avz --delete \
+            --exclude=.git --exclude=.github --exclude='film_web.mp4' \
+            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new" \
+            ./ "$VPS_USER@$VPS_HOST:/var/www/workbench/"

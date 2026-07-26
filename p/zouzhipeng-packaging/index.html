@@ -818,9 +818,9 @@ document.documentElement.classList.add('js');
   document.querySelectorAll('.rv').forEach(function(el){ io.observe(el); });
 })();
 
-/* 审片意见：localStorage 本地保存（纯静态站，无服务端，数据仅存于本浏览器） */
+/* 审片意见：Cloudflare Worker + KV 共享存储，所有访客可见（部署见 tools/comments-worker/README.md） */
 (function(){
-  var KEY = 'review:zouzhipeng-packaging';
+  var REVIEW_API = 'https://review-comments.tripple.workers.dev/zouzhipeng-packaging';
   var video = document.querySelector('.monitor video');
   var form = document.getElementById('reviewForm');
   var nameEl = document.getElementById('reviewName');
@@ -830,13 +830,16 @@ document.documentElement.classList.add('js');
   var countEl = document.getElementById('reviewCount');
   if(!form || !listEl) return;
 
-  function load(){
-    try{ var v = JSON.parse(localStorage.getItem(KEY) || '[]'); return Array.isArray(v) ? v : []; }
-    catch(e){ return []; }
+  /* 管理令牌：?review-admin=<token> 写入本机，?review-admin= 清除；有令牌才显示删除按钮 */
+  var qs = new URLSearchParams(location.search);
+  if(qs.has('review-admin')){
+    var tok = qs.get('review-admin');
+    if(tok){ try{ localStorage.setItem('review-admin', tok); }catch(e){} }
+    else{ try{ localStorage.removeItem('review-admin'); }catch(e){} }
   }
-  function save(items){
-    try{ localStorage.setItem(KEY, JSON.stringify(items)); }catch(e){}
-  }
+  var adminToken = '';
+  try{ adminToken = localStorage.getItem('review-admin') || ''; }catch(e){}
+
   function fmtTC(sec){
     sec = Math.max(0, Math.floor(sec));
     var h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60), s = sec % 60;
@@ -848,16 +851,19 @@ document.documentElement.classList.add('js');
     function p(n){ return (n < 10 ? '0' : '') + n; }
     return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
   }
+  function note(msg){
+    listEl.textContent = '';
+    var li = document.createElement('li');
+    li.className = 'rempty';
+    li.textContent = msg;
+    listEl.appendChild(li);
+  }
 
-  function render(){
-    var items = load();
+  function render(items){
     listEl.textContent = '';
     countEl.textContent = items.length ? items.length + ' 条' : '';
     if(!items.length){
-      var empty = document.createElement('li');
-      empty.className = 'rempty';
-      empty.textContent = '还没有审片意见 —— 第一条由你来写。';
-      listEl.appendChild(empty);
+      note('还没有审片意见 —— 第一条由你来写。');
       return;
     }
     items.slice().reverse().forEach(function(it){
@@ -883,15 +889,26 @@ document.documentElement.classList.add('js');
       var when = document.createElement('span');
       when.textContent = fmtDate(it.ts);
       meta.appendChild(when);
-      var del = document.createElement('button');
-      del.type = 'button';
-      del.className = 'del';
-      del.textContent = '删除';
-      del.addEventListener('click', function(){
-        save(load().filter(function(x){ return x.ts !== it.ts; }));
-        render();
-      });
-      meta.appendChild(del);
+      if(adminToken){
+        var del = document.createElement('button');
+        del.type = 'button';
+        del.className = 'del';
+        del.textContent = '删除';
+        del.addEventListener('click', function(){
+          del.disabled = true;
+          fetch(REVIEW_API + '?id=' + encodeURIComponent(it.id), {
+            method: 'DELETE',
+            headers: { 'X-Admin-Token': adminToken }
+          }).then(function(r){
+            if(!r.ok) throw new Error('delete failed');
+            return refresh();
+          }).catch(function(){
+            del.disabled = false;
+            del.textContent = '删除失败';
+          });
+        });
+        meta.appendChild(del);
+      }
       li.appendChild(meta);
       var text = document.createElement('div');
       text.className = 'rtext';
@@ -901,20 +918,43 @@ document.documentElement.classList.add('js');
     });
   }
 
+  function refresh(){
+    return fetch(REVIEW_API).then(function(r){
+      if(!r.ok) throw new Error('load failed');
+      return r.json();
+    }).then(function(data){
+      render((data && data.comments) || []);
+    }).catch(function(){
+      countEl.textContent = '';
+      note('意见列表加载失败 —— 评论服务未就绪或网络异常。');
+    });
+  }
+
   form.addEventListener('submit', function(ev){
     ev.preventDefault();
     var t = textEl.value.trim();
     if(!t){ textEl.focus(); return; }
-    var it = { n: nameEl.value.trim().slice(0, 24), t: t, ts: Date.now() };
-    if(tcEl.checked && video && isFinite(video.currentTime)) it.tc = video.currentTime;
-    var items = load();
-    items.push(it);
-    save(items);
-    textEl.value = '';
-    render();
+    var body = { n: nameEl.value.trim().slice(0, 24), t: t };
+    if(tcEl.checked && video && isFinite(video.currentTime)) body.tc = video.currentTime;
+    var btn = form.querySelector('button[type=submit]');
+    btn.disabled = true;
+    fetch(REVIEW_API, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    }).then(function(r){
+      if(!r.ok) throw new Error('submit failed');
+      textEl.value = '';
+      return refresh();
+    }).catch(function(){
+      note('提交失败 —— 评论服务未就绪或网络异常，请稍后重试。');
+    }).then(function(){
+      btn.disabled = false;
+    });
   });
 
-  render();
+  note('加载中…');
+  refresh();
 })();
 </script>
 

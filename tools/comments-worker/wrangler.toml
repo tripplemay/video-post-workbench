@@ -1,0 +1,13 @@
+name = "review-comments"
+main = "worker.js"
+compatibility_date = "2026-07-26"
+
+# 自定义域 comments.guangai.ai 需要 Zone 级「Workers Routes:Edit」权限，
+# 当前 R2 token 没有该权限，先挂 workers.dev 免费子域使用；
+# 之后在 Cloudflare 后台给 Worker 添加路由 comments.guangai.ai/* 即可切回自定义域。
+workers_dev = true
+
+# KV 命名空间：npx wrangler kv namespace create COMMENTS（已创建）
+[[kv_namespaces]]
+binding = "COMMENTS"
+id = "99c2028c678b4d4e9d8617b03868f62c"

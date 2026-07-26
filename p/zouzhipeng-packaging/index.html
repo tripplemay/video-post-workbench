@@ -97,6 +97,41 @@ body::after{
 .kpi .l{font-family:var(--mono);font-size:10.5px;letter-spacing:.22em;color:var(--gray2);
   text-transform:uppercase;margin-top:6px;}
 
+/* 审片意见 */
+.review{margin-top:36px;border:1px solid var(--line);background:var(--ink2);}
+.review .rhead{display:flex;align-items:baseline;justify-content:space-between;
+  padding:16px 22px;border-bottom:1px solid var(--line2);}
+.review .rhead .t{font-family:var(--mono);font-size:11.5px;letter-spacing:.42em;color:var(--gold);text-transform:uppercase;}
+.review .rhead .c{font-family:var(--mono);font-size:11px;color:var(--gray2);letter-spacing:.14em;}
+.review .rform{padding:20px 22px;border-bottom:1px solid var(--line2);}
+.review .rrow{display:flex;gap:12px;flex-wrap:wrap;align-items:center;}
+.review input[type=text]{flex:1;min-width:180px;background:var(--ink);border:1px solid var(--line);
+  color:var(--paper);font-family:var(--sans);font-size:13.5px;padding:9px 12px;}
+.review textarea{width:100%;min-height:76px;resize:vertical;background:var(--ink);
+  border:1px solid var(--line);color:var(--paper);font-family:var(--sans);font-size:14px;
+  line-height:1.7;padding:10px 12px;margin:12px 0;}
+.review input[type=text]:focus,.review textarea:focus{outline:none;border-color:var(--gold-dim);}
+.review .rtc{display:flex;align-items:center;gap:7px;font-family:var(--mono);font-size:11.5px;
+  color:var(--gray);letter-spacing:.06em;cursor:pointer;user-select:none;}
+.review .rtc input{accent-color:var(--gold);}
+.review button{background:var(--gold);color:var(--ink);border:none;cursor:pointer;
+  font-family:var(--mono);font-size:12px;letter-spacing:.18em;padding:10px 22px;
+  transition:background .2s ease;}
+.review button:hover{background:var(--paper);}
+.review .rlist{list-style:none;}
+.review .rlist li{padding:16px 22px;border-top:1px solid var(--line2);}
+.review .rlist li:first-child{border-top:none;}
+.review .rmeta{display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center;
+  font-family:var(--mono);font-size:11px;color:var(--gray2);letter-spacing:.06em;}
+.review .rmeta .who{color:var(--paper);font-family:var(--sans);font-size:13px;font-weight:600;letter-spacing:0;}
+.review .rmeta .tc{color:var(--gold);cursor:pointer;border:1px solid var(--gold-dim);padding:0 8px;}
+.review .rmeta .tc:hover{background:rgba(212,175,55,.12);}
+.review .rmeta .del{margin-left:auto;color:var(--gray2);cursor:pointer;background:none;border:none;
+  font-family:var(--mono);font-size:11px;letter-spacing:.1em;padding:0;}
+.review .rmeta .del:hover{color:#c77;}
+.review .rtext{margin-top:8px;font-size:14px;color:var(--gray);line-height:1.8;white-space:pre-wrap;word-break:break-word;}
+.review .rempty{padding:22px;font-family:var(--mono);font-size:11.5px;color:var(--gray2);letter-spacing:.12em;}
+
 /* 章节头 · 片中章节卡同款版式 */
 section{padding:92px 0;border-top:1px solid var(--line2);}
 .slate{position:relative;border:1px solid var(--line);padding:46px 44px;margin-bottom:48px;
@@ -311,6 +346,22 @@ html.js .rv.on{opacity:1;transform:none;}
       <div class="kpi"><div class="n">925<small>条</small></div><div class="l">字幕事件 · 样式 A</div></div>
       <div class="kpi"><div class="n">7<small>段</small></div><div class="l">克隆音色旁白 · 整段合成</div></div>
       <div class="kpi"><div class="n">5<small>个</small></div><div class="l">交付文件 · 两种维度组合</div></div>
+    </div>
+
+    <div class="review rv" id="review">
+      <div class="rhead">
+        <span class="t">Review · 审片意见</span>
+        <span class="c" id="reviewCount"></span>
+      </div>
+      <form class="rform" id="reviewForm">
+        <div class="rrow">
+          <input type="text" id="reviewName" maxlength="24" placeholder="署名（可留空，显示为匿名）">
+          <label class="rtc"><input type="checkbox" id="reviewTc" checked>附带当前播放时间码</label>
+          <button type="submit">提交意见</button>
+        </div>
+        <textarea id="reviewText" maxlength="2000" placeholder="写下审片意见：落点、节奏、字幕、旁白……勾选时间码后会自动记录当前播放位置，点击时间码可跳播。"></textarea>
+      </form>
+      <ul class="rlist" id="reviewList"></ul>
     </div>
   </div>
 </header>
@@ -765,6 +816,105 @@ document.documentElement.classList.add('js');
     });
   }, {threshold:.12});
   document.querySelectorAll('.rv').forEach(function(el){ io.observe(el); });
+})();
+
+/* 审片意见：localStorage 本地保存（纯静态站，无服务端，数据仅存于本浏览器） */
+(function(){
+  var KEY = 'review:zouzhipeng-packaging';
+  var video = document.querySelector('.monitor video');
+  var form = document.getElementById('reviewForm');
+  var nameEl = document.getElementById('reviewName');
+  var textEl = document.getElementById('reviewText');
+  var tcEl = document.getElementById('reviewTc');
+  var listEl = document.getElementById('reviewList');
+  var countEl = document.getElementById('reviewCount');
+  if(!form || !listEl) return;
+
+  function load(){
+    try{ var v = JSON.parse(localStorage.getItem(KEY) || '[]'); return Array.isArray(v) ? v : []; }
+    catch(e){ return []; }
+  }
+  function save(items){
+    try{ localStorage.setItem(KEY, JSON.stringify(items)); }catch(e){}
+  }
+  function fmtTC(sec){
+    sec = Math.max(0, Math.floor(sec));
+    var h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60), s = sec % 60;
+    function p(n){ return (n < 10 ? '0' : '') + n; }
+    return (h > 0 ? h + ':' + p(m) : m) + ':' + p(s);
+  }
+  function fmtDate(ts){
+    var d = new Date(ts);
+    function p(n){ return (n < 10 ? '0' : '') + n; }
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+  }
+
+  function render(){
+    var items = load();
+    listEl.textContent = '';
+    countEl.textContent = items.length ? items.length + ' 条' : '';
+    if(!items.length){
+      var empty = document.createElement('li');
+      empty.className = 'rempty';
+      empty.textContent = '还没有审片意见 —— 第一条由你来写。';
+      listEl.appendChild(empty);
+      return;
+    }
+    items.slice().reverse().forEach(function(it){
+      var li = document.createElement('li');
+      var meta = document.createElement('div');
+      meta.className = 'rmeta';
+      var who = document.createElement('span');
+      who.className = 'who';
+      who.textContent = it.n || '匿名';
+      meta.appendChild(who);
+      if(typeof it.tc === 'number'){
+        var tc = document.createElement('span');
+        tc.className = 'tc';
+        tc.textContent = '@ ' + fmtTC(it.tc);
+        tc.title = '点击跳转到此时间点';
+        (function(sec){
+          tc.addEventListener('click', function(){
+            if(video){ video.currentTime = sec; video.play(); }
+          });
+        })(it.tc);
+        meta.appendChild(tc);
+      }
+      var when = document.createElement('span');
+      when.textContent = fmtDate(it.ts);
+      meta.appendChild(when);
+      var del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'del';
+      del.textContent = '删除';
+      del.addEventListener('click', function(){
+        save(load().filter(function(x){ return x.ts !== it.ts; }));
+        render();
+      });
+      meta.appendChild(del);
+      li.appendChild(meta);
+      var text = document.createElement('div');
+      text.className = 'rtext';
+      text.textContent = it.t;
+      li.appendChild(text);
+      listEl.appendChild(li);
+    });
+  }
+
+  form.addEventListener('submit', function(ev){
+    ev.preventDefault();
+    var t = textEl.value.trim();
+    if(!t){ textEl.focus(); return; }
+    var it = { n: nameEl.value.trim().slice(0, 24), t: t, ts: Date.now() };
+    if(tcEl.checked && video && isFinite(video.currentTime)) it.tc = video.currentTime;
+    var items = load();
+    items.push(it);
+    save(items);
+    textEl.value = '';
+    render();
+  });
+
+  render();
 })();
 </script>
 

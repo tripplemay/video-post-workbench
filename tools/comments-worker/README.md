@@ -38,8 +38,11 @@ curl https://review-comments.tripple.workers.dev/zouzhipeng-packaging
 
 项目页 `p/<slug>/index.html` 里的 `REVIEW_API` 常量指向 Worker 地址，意见全区共享可见。
 
-## 删除意见（管理）
+## 删除意见
 
-页面上普通访客没有删除按钮。在页面 URL 后加 `?review-admin=<ADMIN_TOKEN>` 访问一次，
-浏览器会记住令牌并显示「删除」按钮（删除请求带 `X-Admin-Token` 头，Worker 校验）。
-再访问 `?review-admin=` （空值）可清除本机令牌。
+- **用户删自己的**：提交时浏览器生成随机删除令牌，服务端只存其 SHA-256 哈希（评论的 `h` 字段，
+  GET 不返回）。本机浏览器持有令牌的评论会显示「删除」按钮，删除请求带 `X-Delete-Token`，
+  Worker 验哈希通过才删。用户清除浏览器数据后失去删除权。
+- **管理员删任意**：在页面 URL 后加 `?review-admin=<ADMIN_TOKEN>` 访问一次，浏览器会记住令牌
+  并对所有评论显示「删除」按钮（删除请求带 `X-Admin-Token` 头，Worker 校验）。
+  再访问 `?review-admin=` （空值）可清除本机令牌。

@@ -840,6 +840,21 @@ document.documentElement.classList.add('js');
   var adminToken = '';
   try{ adminToken = localStorage.getItem('review-admin') || ''; }catch(e){}
 
+  /* 自己的评论：提交时生成随机删除令牌，服务端只存其哈希；令牌存本机，凭它删自己的评论 */
+  var OWN_KEY = 'review-own:zouzhipeng-packaging';
+  function ownLoad(){
+    try{ var v = JSON.parse(localStorage.getItem(OWN_KEY) || '{}'); return v && typeof v === 'object' ? v : {}; }
+    catch(e){ return {}; }
+  }
+  function ownSave(m){
+    try{ localStorage.setItem(OWN_KEY, JSON.stringify(m)); }catch(e){}
+  }
+  function sha256hex(str){
+    return crypto.subtle.digest('SHA-256', new TextEncoder().encode(str)).then(function(buf){
+      return Array.from(new Uint8Array(buf)).map(function(b){ return b.toString(16).padStart(2, '0'); }).join('');
+    });
+  }
+
   function fmtTC(sec){
     sec = Math.max(0, Math.floor(sec));
     var h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60), s = sec % 60;
@@ -889,18 +904,24 @@ document.documentElement.classList.add('js');
       var when = document.createElement('span');
       when.textContent = fmtDate(it.ts);
       meta.appendChild(when);
-      if(adminToken){
+      var ownTokens = ownLoad();
+      var ownToken = ownTokens[it.id];
+      if(adminToken || ownToken){
         var del = document.createElement('button');
         del.type = 'button';
         del.className = 'del';
         del.textContent = '删除';
         del.addEventListener('click', function(){
           del.disabled = true;
+          var headers = adminToken ? { 'X-Admin-Token': adminToken } : { 'X-Delete-Token': ownToken };
           fetch(REVIEW_API + '?id=' + encodeURIComponent(it.id), {
             method: 'DELETE',
-            headers: { 'X-Admin-Token': adminToken }
+            headers: headers
           }).then(function(r){
             if(!r.ok) throw new Error('delete failed');
+            var m = ownLoad();
+            delete m[it.id];
+            ownSave(m);
             return refresh();
           }).catch(function(){
             del.disabled = false;
@@ -938,12 +959,24 @@ document.documentElement.classList.add('js');
     if(tcEl.checked && video && isFinite(video.currentTime)) body.tc = video.currentTime;
     var btn = form.querySelector('button[type=submit]');
     btn.disabled = true;
-    fetch(REVIEW_API, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
+    /* 生成删除令牌，只把哈希交给服务端 */
+    var delToken = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random());
+    sha256hex(delToken).then(function(h){
+      body.h = h;
+      return fetch(REVIEW_API, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
     }).then(function(r){
       if(!r.ok) throw new Error('submit failed');
+      return r.json();
+    }).then(function(data){
+      if(data && data.comment && data.comment.id){
+        var m = ownLoad();
+        m[data.comment.id] = delToken;
+        ownSave(m);
+      }
       textEl.value = '';
       return refresh();
     }).catch(function(){

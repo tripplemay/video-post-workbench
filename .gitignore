@@ -1,0 +1,3 @@
+# 预览视频不入仓库（单文件超 GitHub 100MB 限制），统一走 Release 托管
+# 约定：网页预览视频一律命名 film_web.mp4，发布见 tools/upload_video.sh
+**/film_web.mp4

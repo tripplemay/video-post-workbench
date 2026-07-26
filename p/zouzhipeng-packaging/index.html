@@ -1,0 +1,772 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>福哥和他的朋友们 · 邹志鹏期 — 后期包装工艺</title>
+<meta name="description" content="一位义务支教近二十年乡村教师的访谈成片：从剪辑纯净版到包装交付版的一条 Python + ffmpeg 管线——20 张叙事卡片、925 条字幕、7 段 AI 旁白、序章与片尾装配，全记录。">
+<meta property="og:type" content="website">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:title" content="福哥和他的朋友们 · 邹志鹏期 — 后期包装工艺">
+<meta property="og:description" content="从纯净版到包装成片：20 张卡片、925 条字幕、7 段 AI 旁白、40.5 秒序章，一条 Python + ffmpeg 可复现管线。">
+<meta property="og:image" content="https://tripplemay.github.io/video-post-workbench/p/zouzhipeng-packaging/assets/og.jpg">
+<meta property="og:url" content="https://tripplemay.github.io/video-post-workbench/p/zouzhipeng-packaging/">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpolygon points='4,6 28,6 16,26' fill='%23D4AF37'/%3E%3C/svg%3E">
+<style>
+/* ============ 视觉系统：片子的包装系统，就是页面的设计系统 ============ */
+:root{
+  --ink:#141310;        /* 墨黑 · 卡片底色 */
+  --ink2:#1c1b18;       /* 面板 */
+  --ink3:#24221d;       /* 深面板 */
+  --gold:#D4AF37;       /* 暖金黄 · 栏目品牌色 */
+  --gold-dim:#a8873c;
+  --paper:#f3efe4;      /* 纸色 · 章节卡同款 */
+  --gray:#b8b2a2;
+  --gray2:#8a857a;
+  --line:rgba(243,239,228,.14);
+  --line2:rgba(243,239,228,.07);
+  --serif:"Noto Serif SC","Songti SC","SimSun",serif;
+  --sans:"Microsoft YaHei","PingFang SC","Noto Sans SC",system-ui,sans-serif;
+  --mono:"JetBrains Mono","Consolas","SF Mono",monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box;}
+html{scroll-behavior:smooth;}
+body{
+  background:var(--ink);color:var(--paper);
+  font-family:var(--sans);font-size:15.5px;line-height:1.8;
+  -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;
+}
+::selection{background:var(--gold);color:var(--ink);}
+img{max-width:100%;}
+a{color:var(--gold);text-decoration:none;}
+.wrap{max-width:1120px;margin:0 auto;padding:0 28px;}
+
+/* 胶片噪点 */
+body::after{
+  content:"";position:fixed;inset:0;z-index:90;pointer-events:none;opacity:.045;
+  background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* 滚动进度 */
+#progress{position:fixed;top:0;left:0;height:2px;width:0;background:var(--gold);z-index:99;}
+
+/* 顶栏 */
+.topbar{position:sticky;top:0;z-index:80;background:rgba(20,19,16,.86);backdrop-filter:blur(12px);
+  border-bottom:1px solid var(--line2);}
+.topbar .row{display:flex;align-items:center;justify-content:space-between;padding:14px 0;}
+.topbar .brand{font-family:var(--serif);font-size:16px;letter-spacing:.12em;color:var(--paper);}
+.topbar .brand em{font-style:normal;color:var(--gold);}
+.topbar .meta{font-family:var(--mono);font-size:10.5px;letter-spacing:.3em;color:var(--gray2);text-transform:uppercase;}
+
+/* 面包屑 */
+.crumbs{border-top:1px solid var(--line2);}
+.crumbs .crow{display:flex;align-items:center;gap:12px;padding:8px 0;
+  font-family:var(--mono);font-size:11px;letter-spacing:.12em;color:var(--gray2);}
+.crumbs a{color:var(--gray);transition:color .2s ease;}
+.crumbs a:hover{color:var(--gold);}
+.crumbs .sep{color:var(--gold);font-size:9px;}
+.crumbs .cur{color:var(--paper);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+
+/* HERO */
+.hero{padding:96px 0 72px;}
+.eyebrow{font-family:var(--mono);font-size:11.5px;letter-spacing:.38em;color:var(--gold);
+  text-transform:uppercase;margin-bottom:26px;}
+.hero h1{font-family:var(--serif);font-weight:700;font-size:clamp(34px,5.2vw,58px);
+  line-height:1.3;letter-spacing:.03em;margin-bottom:14px;}
+.hero .sub{font-family:var(--serif);font-size:clamp(16px,2vw,20px);color:var(--gray);margin-bottom:30px;}
+.hero .lead{color:var(--gray);max-width:68ch;font-size:16px;}
+.hero .lead b{color:var(--paper);font-weight:600;}
+
+/* 监视器框 */
+.monitor{margin:52px 0 0;border:1px solid var(--line);background:#000;
+  box-shadow:0 30px 80px rgba(0,0,0,.5);}
+.monitor video{display:block;width:100%;height:auto;background:#000;}
+.monitor .bar{display:flex;flex-wrap:wrap;gap:6px 20px;align-items:center;
+  padding:11px 16px;border-top:1px solid var(--line2);
+  font-family:var(--mono);font-size:11px;color:var(--gray2);letter-spacing:.06em;}
+.monitor .bar b{color:var(--gold);font-weight:500;}
+.monitor .bar .dot{color:var(--gold);}
+
+/* KPI */
+.kpis{display:grid;grid-template-columns:repeat(4,1fr);border:1px solid var(--line);
+  border-top:none;background:var(--ink2);}
+.kpi{padding:22px 24px;border-left:1px solid var(--line2);}
+.kpi:first-child{border-left:none;}
+.kpi .n{font-family:var(--serif);font-size:36px;font-weight:700;color:var(--paper);line-height:1.15;}
+.kpi .n small{font-size:16px;color:var(--gold);margin-left:2px;}
+.kpi .l{font-family:var(--mono);font-size:10.5px;letter-spacing:.22em;color:var(--gray2);
+  text-transform:uppercase;margin-top:6px;}
+
+/* 章节头 · 片中章节卡同款版式 */
+section{padding:92px 0;border-top:1px solid var(--line2);}
+.slate{position:relative;border:1px solid var(--line);padding:46px 44px;margin-bottom:48px;
+  background:linear-gradient(180deg,rgba(212,175,55,.035),transparent 62%);}
+.slate::before{content:"";position:absolute;inset:7px;border:1px solid var(--line2);pointer-events:none;}
+.slate .no{font-family:var(--mono);font-size:11.5px;letter-spacing:.42em;color:var(--gold);
+  text-transform:uppercase;margin-bottom:20px;}
+.slate h2{font-family:var(--serif);font-weight:700;font-size:clamp(26px,3.4vw,38px);
+  letter-spacing:.04em;line-height:1.35;}
+.slate .dash{width:68px;height:2px;background:var(--gold);margin:20px 0 14px;}
+.slate .teaser{font-family:var(--serif);font-size:15.5px;color:var(--gray);}
+.slate .lead2{margin-top:18px;color:var(--gray);max-width:72ch;font-size:15px;}
+.slate .lead2 b{color:var(--paper);font-weight:600;}
+
+/* 六步管线 */
+.steps{display:grid;grid-template-columns:repeat(6,1fr);gap:1px;background:var(--line2);
+  border:1px solid var(--line);}
+.step{background:var(--ink);padding:20px 18px;}
+.step .n{font-family:var(--mono);font-size:11px;color:var(--gold);letter-spacing:.2em;}
+.step .t{font-weight:600;font-size:15px;margin:10px 0 6px;color:var(--paper);}
+.step .d{font-size:12.5px;color:var(--gray2);line-height:1.7;}
+.steps.five{grid-template-columns:repeat(5,1fr);}
+
+/* 图文行 */
+.feat{display:grid;grid-template-columns:1.15fr .85fr;gap:44px;align-items:center;margin-bottom:56px;}
+.feat:last-child{margin-bottom:0;}
+.feat.rev .fig{order:2;}
+.fig{border:1px solid var(--line);background:#0a0a09;overflow:hidden;}
+.fig img{display:block;width:100%;height:auto;}
+.fig .cap{display:flex;gap:10px;padding:10px 14px;border-top:1px solid var(--line2);
+  font-family:var(--mono);font-size:10.5px;color:var(--gray2);letter-spacing:.08em;line-height:1.6;}
+.fig .cap::before{content:"▸";color:var(--gold);flex:none;}
+.txt h3{font-family:var(--serif);font-size:22px;margin-bottom:16px;letter-spacing:.03em;}
+.txt p{color:var(--gray);font-size:14.5px;margin-bottom:12px;}
+.txt p b{color:var(--paper);font-weight:600;}
+.txt .num{font-family:var(--mono);color:var(--gold);font-size:13.5px;}
+
+/* 卡片墙 */
+.wall{display:grid;grid-template-columns:repeat(2,1fr);gap:20px;}
+.wall .fig{background:#0f0e0c;}
+
+/* 双栏 */
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:40px;}
+.col h4{font-family:var(--mono);font-size:11.5px;letter-spacing:.3em;color:var(--gold);
+  text-transform:uppercase;margin-bottom:20px;padding-bottom:12px;border-bottom:1px solid var(--line2);}
+.col ul{list-style:none;}
+.col li{color:var(--gray);font-size:14px;line-height:1.85;padding-left:20px;position:relative;margin-bottom:14px;}
+.col li::before{content:"";position:absolute;left:0;top:11px;width:8px;height:5px;
+  background:var(--gold);clip-path:polygon(0 0,100% 0,50% 100%);}
+.col li b{color:var(--paper);font-weight:600;}
+.fix{font-family:var(--mono);font-size:12.5px;line-height:2.1;color:var(--gray2);}
+.fix del{color:#c77;text-decoration-color:rgba(204,119,119,.55);}
+.fix b{color:var(--gold);font-weight:500;}
+.fix i{font-style:normal;color:var(--gray2);margin:0 2px;}
+
+/* 三格故事 */
+.trio{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:36px;}
+.tcard{border:1px solid var(--line);background:var(--ink2);padding:24px;}
+.tcard .tag{font-family:var(--mono);font-size:10.5px;letter-spacing:.3em;color:var(--gold);
+  text-transform:uppercase;}
+.tcard .t{font-family:var(--serif);font-size:17px;margin:12px 0 8px;}
+.tcard .d{font-size:13px;color:var(--gray);line-height:1.8;}
+.tcard .d b{color:var(--paper);font-weight:600;}
+.tcard code{font-family:var(--mono);font-size:11.5px;color:var(--gold);background:var(--ink3);
+  padding:1px 6px;}
+
+/* 滤镜链 */
+.chain{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:28px 0;}
+.chain .node{border:1px solid var(--line);background:var(--ink2);padding:9px 14px;
+  font-family:var(--mono);font-size:12px;color:var(--paper);white-space:nowrap;}
+.chain .node em{font-style:normal;color:var(--gold);}
+.chain .arr{color:var(--gold);font-family:var(--mono);font-size:12px;}
+
+/* 序章时间轴 */
+.tlwrap{margin:36px 0 8px;}
+.tl{display:flex;border:1px solid var(--line);min-height:96px;}
+.tl .seg{position:relative;padding:14px 16px;border-left:1px solid var(--line2);
+  display:flex;flex-direction:column;justify-content:space-between;background:var(--ink2);}
+.tl .seg:first-child{border-left:none;}
+.tl .seg.alt{background:var(--ink);}
+.tl .seg .t{font-family:var(--serif);font-size:15.5px;}
+.tl .seg .d{font-size:11.5px;color:var(--gray2);margin-top:4px;line-height:1.6;}
+.tl .seg .tm{font-family:var(--mono);font-size:11px;color:var(--gold);margin-top:10px;}
+.ruler{position:relative;height:44px;margin-top:14px;border-top:1px dashed var(--line);}
+.ruler .vo{position:absolute;top:-1px;}
+.ruler .vo::before{content:"";position:absolute;top:0;left:0;width:1px;height:12px;background:var(--gold);}
+.ruler .vo span{position:absolute;top:14px;left:-4px;font-family:var(--mono);font-size:10px;
+  color:var(--gold);white-space:nowrap;}
+
+/* 证据帧网格 */
+.frames{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;}
+
+/* 交付表 */
+.dtable{width:100%;border-collapse:collapse;border:1px solid var(--line);}
+.dtable th{font-family:var(--mono);font-size:10.5px;letter-spacing:.24em;color:var(--gray2);
+  text-transform:uppercase;text-align:left;padding:13px 16px;background:var(--ink2);
+  border-bottom:1px solid var(--line);}
+.dtable td{padding:13px 16px;border-top:1px solid var(--line2);font-size:13px;color:var(--gray);
+  vertical-align:top;}
+.dtable td.f{font-family:var(--mono);font-size:12px;color:var(--paper);}
+.dtable td.s{font-family:var(--mono);font-size:12px;color:var(--gold);white-space:nowrap;}
+.dtable tr:first-child td{border-top:none;}
+.dnote{margin-top:16px;font-size:13px;color:var(--gray2);}
+
+/* 待办 */
+.gaps{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
+.gap{border:1px solid var(--line);border-left:2px solid var(--gold);background:var(--ink2);padding:20px 22px;}
+.gap .t{font-weight:600;font-size:15px;margin-bottom:8px;}
+.gap .d{font-size:13px;color:var(--gray);line-height:1.8;}
+.gap .tag{display:inline-block;font-family:var(--mono);font-size:9.5px;letter-spacing:.22em;
+  text-transform:uppercase;color:var(--gold);border:1px solid var(--gold-dim);
+  padding:2px 9px;margin-top:14px;}
+
+/* 版本线 */
+.vers{border-left:1px solid var(--line);margin-left:6px;}
+.ver{position:relative;padding:0 0 30px 28px;}
+.ver:last-child{padding-bottom:0;}
+.ver::before{content:"";position:absolute;left:-5.5px;top:8px;width:8px;height:8px;
+  background:var(--ink);border:2px solid var(--gold);transform:rotate(45deg);}
+.ver .v{font-family:var(--mono);font-size:12px;color:var(--gold);letter-spacing:.14em;}
+.ver .d{color:var(--gray);font-size:14px;margin-top:6px;}
+.ver.cur .d{color:var(--paper);}
+
+/* footer */
+footer{padding:64px 0 72px;border-top:1px solid var(--line2);color:var(--gray2);
+  font-family:var(--mono);font-size:12px;line-height:2.1;}
+footer .path{color:var(--gray);}
+footer .flogo{display:flex;align-items:center;gap:16px;margin-top:32px;
+  padding-top:26px;border-top:1px solid var(--line2);}
+footer .flogo svg{flex:none;}
+footer .flogo span{font-size:11px;letter-spacing:.14em;}
+
+/* 滚动淡入（无 JS 时默认可见） */
+html.js .rv{opacity:0;transform:translateY(16px);transition:opacity .7s ease,transform .7s ease;}
+html.js .rv.on{opacity:1;transform:none;}
+@media (prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto;}
+  html.js .rv{opacity:1;transform:none;transition:none;}
+}
+
+/* 响应式 */
+@media (max-width:1000px){
+  .steps,.steps.five{grid-template-columns:repeat(3,1fr);}
+}
+@media (max-width:860px){
+  .feat,.cols,.wall,.gaps{grid-template-columns:1fr;}
+  .feat.rev .fig{order:0;}
+  .trio{grid-template-columns:1fr;}
+  .frames{grid-template-columns:repeat(2,1fr);}
+  .tlwrap{overflow-x:auto;}
+  .tl{min-width:680px;}
+  .ruler{min-width:680px;}
+}
+@media (max-width:640px){
+  .wrap{padding:0 20px;}
+  section{padding:64px 0;}
+  .hero{padding:64px 0 52px;}
+  .slate{padding:32px 24px;}
+  .kpis{grid-template-columns:repeat(2,1fr);}
+  .kpi:nth-child(3){border-left:none;}
+  .kpi{padding:16px 18px;}
+  .kpi .n{font-size:28px;}
+  .steps,.steps.five{grid-template-columns:1fr;}
+  .topbar .meta{display:none;}
+  .dtable th:nth-child(2),.dtable td:nth-child(2){display:none;}
+}
+</style>
+</head>
+<body>
+
+<div id="progress"></div>
+
+<!-- 顶栏 + 面包屑 -->
+<div class="topbar">
+  <div class="wrap"><div class="row">
+    <span class="brand">福哥和他的朋友们 <em>·</em> 邹志鹏期</span>
+    <span class="meta">Post-Production Package · Craft Breakdown</span>
+  </div></div>
+  <nav class="crumbs" aria-label="breadcrumb">
+    <div class="wrap"><div class="crow">
+      <a href="../../">工作台</a><span class="sep">▸</span><span class="cur">福哥和他的朋友们 · 邹志鹏期 — 后期包装</span>
+    </div></div>
+  </nav>
+</div>
+
+<!-- HERO -->
+<header class="hero">
+  <div class="wrap">
+    <div class="eyebrow">TC 00:00:00:00 · 后期包装工艺拆解</div>
+    <h1>从纯净版，到包装成片</h1>
+    <div class="sub">《福哥和他的朋友们》邹志鹏期 · 后期包装全记录</div>
+    <p class="lead">一位义务支教近二十年的乡村教师。剪辑定稿的「纯净版」交出之后，包装开始：
+      <b>22 张叙事卡片、925 条字幕、7 段福哥音色旁白</b>、3 秒栏目片头、45.4 秒序章与一支新片尾——
+      全部用 <b>Python + ffmpeg</b> 写成可复现的管线，把 29:24 的主片装配成 31:12 的定稿版。
+      这一页记录每一层包装怎么做、为什么这么做，以及还缺什么。</p>
+
+    <div class="monitor rv">
+      <video controls preload="metadata" playsinline poster="assets/poster.jpg">
+        <source src="https://cdn.guangai.ai/zouzhipeng-packaging/film_web.mp4" type="video/mp4">
+        当前浏览器无法内嵌播放
+      </video>
+      <div class="bar">
+        <span><b>FINAL</b> 31:12</span><span class="dot">·</span>
+        <span>1920×1080 25p · 本站预览 720p</span><span class="dot">·</span>
+        <span>片头 + 序章 + 四幕 + 尾声</span><span class="dot">·</span>
+        <span>字幕 / 卡片 / 旁白 全装配</span>
+      </div>
+    </div>
+
+    <div class="kpis rv">
+      <div class="kpi"><div class="n">22<small>张</small></div><div class="l">叙事卡片 · 1080p PNG</div></div>
+      <div class="kpi"><div class="n">925<small>条</small></div><div class="l">字幕事件 · 样式 A</div></div>
+      <div class="kpi"><div class="n">7<small>段</small></div><div class="l">克隆音色旁白 · 整段合成</div></div>
+      <div class="kpi"><div class="n">5<small>个</small></div><div class="l">交付文件 · 两种维度组合</div></div>
+    </div>
+  </div>
+</header>
+
+<!-- SEC 01 · 上游：重剪管线 -->
+<section>
+  <div class="wrap">
+    <div class="slate rv">
+      <div class="no">SEC 01 · Upstream</div>
+      <h2>上游：纯净版怎么来的</h2>
+      <div class="dash"></div>
+      <div class="teaser">包装之前还有一条重剪管线——从 4.7 小时原始素材，到 31:29 的纯净版。</div>
+      <p class="lead2">原料是 <b>191GB 广播级素材</b>（三机位访谈 5 个 take + 约 110 段 B-roll）。重剪管线约 14 小时
+        （7-21 晚 → 7-22 午）跑完代理、转写、语义标注与十五版粗剪，交出包装管线的输入——
+        <b>1920×1080 · 31:29 的「纯净版」</b>。以下每一步的产物都留在工作目录里，可复查。</p>
+    </div>
+    <div class="steps five rv">
+      <div class="step"><div class="n">01 · PROXY</div><div class="t">四机位代理</div>
+        <div class="d">原始素材转 720p 代理（detail / fu / wide / zou 四路），工作集独立，原素材只读不动。</div></div>
+      <div class="step"><div class="n">02 · TRANSCRIBE</div><div class="t">四轮转写</div>
+        <div class="d">5 个 take 同期声逐轮重转（transcript → transcript4），sync_offsets.json 记录机位同步偏移。</div></div>
+      <div class="step"><div class="n">03 · SEMANTICS</div><div class="t">语义标注</div>
+        <div class="d">逐 take 语义标签多轮迭代（final → v2 → v4），访谈变成可检索、可纸面剪辑的素材。</div></div>
+      <div class="step"><div class="n">04 · ROUGHCUT</div><div class="t">十五版粗剪</div>
+        <div class="d">roughcut_v1–v15（720p）：结构、节奏、取舍逐版逼近，每版整条渲出看整体。</div></div>
+      <div class="step"><div class="n">05 · MIX &amp; QA</div><div class="t">混版与核验</div>
+        <div class="d">音频混版 v5 / v8 / v10 / v13；逐版转写回听核对（v*check），最终产出 31:29 纯净版。</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- SEC 02 · 管线总览 -->
+<section>
+  <div class="wrap">
+    <div class="slate rv">
+      <div class="no">SEC 02 · Pipeline</div>
+      <h2>包装管线：六步装配</h2>
+      <div class="dash"></div>
+      <div class="teaser">不用剪辑软件的时间线——每一层包装都是脚本里的数据结构，可复现、可版本化。</div>
+    </div>
+    <div class="steps rv">
+      <div class="step"><div class="n">01 · CARDS</div><div class="t">卡片生成</div>
+        <div class="d">Pillow 模板直出 20 张 1080p PNG：章节卡、数据卡、人名条、金句卡。</div></div>
+      <div class="step"><div class="n">02 · SUBTITLES</div><div class="t">字幕生成</div>
+        <div class="d">ASR 底稿 → 纠错词典 → 样式 A 的 ASS，925 条事件一次产出。</div></div>
+      <div class="step"><div class="n">03 · VOICEOVER</div><div class="t">旁白合成</div>
+        <div class="d">克隆福哥音色 TTS 整段合成，whisper 听回切句，7 段落点。</div></div>
+      <div class="step"><div class="n">04 · RENDER</div><div class="t">正片渲染</div>
+        <div class="d">单条 filter_complex：字幕烧录 + 10 组卡片叠加 + NVENC。</div></div>
+      <div class="step"><div class="n">05 · PRO / END</div><div class="t">序章片尾</div>
+        <div class="d">3s 栏目片头 + 45.4s 序章四段式 + 60s 新片尾，同质感同响度。</div></div>
+      <div class="step"><div class="n">06 · MIX / VERIFY</div><div class="t">混音核验</div>
+        <div class="d">侧链闪避、两遍 loudnorm、抽帧检查与音轨时长校验。</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- SEC 03 · 视觉系统 -->
+<section>
+  <div class="wrap">
+    <div class="slate rv">
+      <div class="no">SEC 03 · Visual System</div>
+      <h2>视觉系统：卡片即叙事</h2>
+      <div class="dash"></div>
+      <div class="teaser">包装不只是美化——数据卡回答疑问，章节卡提出悬念，金句卡钉住情绪锚点。</div>
+      <p class="lead2">全套卡片由 <b>gen_cards.py</b> 用 Pillow 直接绘制：暖金黄 <b>#D4AF37</b> 取自栏目「福」字 logo，
+        纸色文字、细线双框、衬线标题。版式即品牌，页面亦沿用同一套语言。</p>
+    </div>
+
+    <div class="feat rv">
+      <div class="fig"><img src="assets/card_p1.png" alt="章节卡 PART 01" width="1920" height="1080">
+        <div class="cap">章节卡 · PART 01「自讨苦吃 甘之如饴」—— 60% 压黑底上叠加，画面保持可见</div></div>
+      <div class="txt">
+        <h3>章节卡 · 套一版式</h3>
+        <p>五张卡：序章 + PART 01–04。版式四层信息——<span class="num">金色 PART 序号</span>（字距拉宽）、
+          衬线大标题、金色短线、一行灰色<b>「题眼」</b>。</p>
+        <p>题眼让观众带着问题进入下一幕：PART 04 的题眼是「他也怀疑过自己 但从未停下」。</p>
+        <p>卡片以 60% 压黑底叠加在画面上、alpha 淡入淡出 <span class="num">0.4s</span>，
+          每章停留 <span class="num">3.2s</span>——是段落缓冲，也是叙事标点。</p>
+      </div>
+    </div>
+
+    <div class="wall">
+      <div class="fig rv"><img src="assets/data_100.png" alt="数据卡 100元" width="1920" height="1080">
+        <div class="cap">数据卡 · PART 01 —— ≤100 元，他每月的全部个人开销</div></div>
+      <div class="fig rv"><img src="assets/data_1w.png" alt="数据卡 1万" width="1920" height="1080">
+        <div class="cap">数据卡 · PART 01 —— 1 万+，他每年花在孩子们身上的钱</div></div>
+      <div class="fig rv"><img src="assets/data_2000.png" alt="数据卡 2000名" width="1920" height="1080">
+        <div class="cap">数据卡 · PART 03 —— 2000+ 名，他直接教过的学生</div></div>
+      <div class="fig rv"><img src="assets/data_2w.png" alt="数据卡 2万元" width="1920" height="1080">
+        <div class="cap">数据卡 · PART 04 —— 2 万元，阿里公益奖励，他又投入支教</div></div>
+      <div class="fig rv"><img src="assets/quote.png" alt="金句卡" width="1920" height="1080">
+        <div class="cap">金句卡 · PART 04 —— 「付出就是种幸福」，衬线大字居中压黑</div></div>
+      <div class="fig rv"><img src="assets/journey.jpg" alt="支教经历卡实拍帧" width="1280" height="720">
+        <div class="cap">支教经历卡 · 常驻面板 + 五条经历逐条显现（103.3–136.08s，重制原片烧录段）</div></div>
+    </div>
+
+    <div class="feat rev rv" style="margin-top:56px;">
+      <div class="fig"><img src="assets/namebar.png" alt="人名条" width="1920" height="1080">
+        <div class="cap">人名条 · 受访者首次出现时标注一次，此后不再打扰</div></div>
+      <div class="txt">
+        <h3>数据卡与人名条 · 落版规则</h3>
+        <p>数据卡落在<b>左下象限</b>：深色半透明面板 + 金色竖线锚定，<b>一屏一数</b>，
+          静态大数字——不做滚动动画，克制才可信。</p>
+        <p>人名条同一锚点语言：姓名大字 + 身份小字 + 左侧金色竖线，
+          出现 <span class="num">6s</span>，alpha 淡入淡出。</p>
+        <p>所有卡片与字幕共用<b>原片时间坐标系</b>，落点写死在 render.py 的 OVERLAYS 表里，随时可改可重渲。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- SEC 04 · 字幕工艺 -->
+<section>
+  <div class="wrap">
+    <div class="slate rv">
+      <div class="no">SEC 04 · Subtitles</div>
+      <h2>字幕：925 条的规则与兜底</h2>
+      <div class="dash"></div>
+      <div class="teaser">模型转写只是底稿——真正的工艺在纠错词典、断行算法与克制强调。</div>
+    </div>
+    <div class="cols">
+      <div class="col rv">
+        <h4>管线做了什么</h4>
+        <ul>
+          <li>ASR 逐句底稿 → <b>42 条分段覆盖</b> + <b>60 余条全局纠错词典</b> → 样式 A 的 ASS 文件，共 925 条事件。</li>
+          <li>样式 A：微软雅黑 Bold 白字 + 半透明黑描边 + 柔影，<b>\fad(200,150)</b> 淡入淡出——调研验证白字黑边可见性最优。</li>
+          <li>排版铁律：每行 ≤16 字、最多两行；双行按<b>「下重金字塔」</b>断行——下行不短于上行，split_two 在空格处评分选点。</li>
+          <li>标点：逗号句号一律以空格代替，保留顿号、书名号、问号。</li>
+        </ul>
+      </div>
+      <div class="col rv">
+        <h4>规则与兜底</h4>
+        <ul>
+          <li><b>纠错对照</b>（词典示例）：
+            <div class="fix"><del>周老师</del><i>→</i><b>邹老师</b> · <del>苹果楼</del><i>→</i><b>拼多多</b> · <del>实质力量</del><i>→</i><b>师资力量</b><br>
+            <del>英体美</del><i>→</i><b>音体美</b> · <del>风雪寺</del><i>→</i><b>风穴寺</b> · <del>感染值</del><i>→</i><b>橄榄枝</b></div></li>
+          <li><b>误伤防护</b>：「自教→支教」会误伤「亲自教」——先以 \x00 占位保护，替换完再还原。</li>
+          <li><b>关键词暖金强调</b>：#D4AF37 只给「100块 / 2000名 / 倒贴 / 傻子」这类金句词，克制使用，不用花字。</li>
+          <li><b>抑制窗口</b>：B-roll 遮盖段（48.44–53.04s）不压字幕；尾声固定文案段整段不加字幕。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- SEC 05 · 旁白工艺 -->
+<section>
+  <div class="wrap">
+    <div class="slate rv">
+      <div class="no">SEC 05 · Voiceover</div>
+      <h2>旁白：一次合成，七段落点</h2>
+      <div class="dash"></div>
+      <div class="teaser">音色统一靠「一次说完」，切分靠模型自己听回来。</div>
+      <p class="lead2">访谈主体段落一律不加旁白，保住对谈现场感。旁白只落在<b>序章 6 句</b>与<b>尾声引入 1 句</b>，
+        承担设问、转折与时空跨越。<b>全部 7 段已改用福哥克隆音色</b>——由栏目创办人亲自「讲述」，叙事更贴身。</p>
+    </div>
+
+    <div class="chain rv">
+      <span class="node">旁白文案</span><span class="arr">→</span>
+      <span class="node">福哥克隆音色 TTS <em>整段一次合成</em></span><span class="arr">→</span>
+      <span class="node">whisper large-v3 <em>词级时间戳切句</em></span><span class="arr">→</span>
+      <span class="node">音频链</span><span class="arr">→</span>
+      <span class="node">落点混入 · <em>侧链闪避</em></span>
+    </div>
+
+    <div class="cols" style="margin-top:8px;">
+      <div class="col rv">
+        <h4>生成与切分</h4>
+        <ul>
+          <li>从成片同期声取<b>福哥声音样本</b>，在 TTS 平台克隆音色（speaker 挂载）；7 句文案<b>一次合成</b>，音色从头统一到尾。</li>
+          <li>合成音频再喂给 faster-whisper large-v3，按<b>词级时间戳</b>找回每句起止，切成 vo_p1–p6。</li>
+          <li>逐段音频链：highpass 80Hz → deesser 去齿音 → 压缩 3:1 → 12kHz 搁架 −1.5dB → 微量 aecho 空间 → loudnorm −19 LUFS。</li>
+          <li>尾声旁白落点 = 片头 3.04 + 序章 45.40 + 正片 1763.78 + 0.5 ≈ <b>1812.7s</b>，以 sidechaincompress 侧链闪避把访谈声压下去再进入。</li>
+        </ul>
+      </div>
+      <div class="col rv">
+        <h4>混音关系</h4>
+        <ul>
+          <li>旁白电平整体低于访谈对白主体，闪避参数 threshold 0.01 / ratio 10 / release 700ms——让得开、回得来。</li>
+          <li>序章旁白垫在音乐床之上：音乐床复用正片片尾两段，volume 0.30 / 0.48 分层淡入。</li>
+          <li>最终全片再过两遍法 loudnorm（I=-16 / TP=-1，linear），网络长视频响度标准。</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="trio">
+      <div class="tcard rv">
+        <div class="tag">Symptom · 症状</div>
+        <div class="t">旁白一说完，全片失声</div>
+        <div class="d">第一版混音输出里，尾声旁白播完后，剩余部分的音轨整体消失。</div>
+      </div>
+      <div class="tcard rv">
+        <div class="tag">Cause · 根因</div>
+        <div class="t">侧链流 EOF 拉停全图</div>
+        <div class="d"><code>sidechaincompress</code> 的旁白输入流较短，到达 EOF 时把整个 filter 图提前终止，主音频随之中断。</div>
+      </div>
+      <div class="tcard rv">
+        <div class="tag">Fix · 修复</div>
+        <div class="t">apad 补静音 + 时长校验</div>
+        <div class="d">旁白流先 <code>apad</code> 补静音再进侧链；输出后强制校验——音轨与视频时长差 <b>&lt;0.5s</b> 才放行。</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- SEC 06 · 序章工艺 -->
+<section>
+  <div class="wrap">
+    <div class="slate rv">
+      <div class="no">SEC 06 · Prologue</div>
+      <h2>序章：45.4 秒立住全片</h2>
+      <div class="dash"></div>
+      <div class="teaser">价值提问 → 现实矛盾 → 事实递进 → 片名落点。</div>
+      <p class="lead2">原片开头的旧蒙太奇与序章立意重复，整段弃用；<b>26.88–29.92s 的芥末黄栏目卡</b>则移到序章之前，成为 3 秒片头。
+        新序章由 <b>build_prologue2.py</b> 单独装配：四段结构、6 段福哥音色旁白落点、<b>一条贯穿全序章的连续音乐床</b>（帧级音量曲线随段落起伏）——
+        与正片<b>同一条滤镜、同一份响度测量</b>，接缝听不出来。</p>
+    </div>
+
+    <div class="tlwrap rv">
+      <div class="tl">
+        <div class="seg" style="flex:80;">
+          <div><div class="t">① 价值提问</div><div class="d">黑底衬线设问卡，留足阅读时间；音乐 0.25 低吟</div></div>
+          <div class="tm">0:00 – 0:08 · 8.0s</div>
+        </div>
+        <div class="seg alt" style="flex:91;">
+          <div><div class="t">② 现实矛盾</div><div class="d">静默快剪 3 条 B-roll（洗衣 / 炊具 / 读写），无字幕只有旁白；音乐渐起</div></div>
+          <div class="tm">0:08 – 0:17.1 · 9.1s</div>
+        </div>
+        <div class="seg" style="flex:203;">
+          <div><div class="t">③ 事实递进</div><div class="d">三张透明文字层压动态压暗背景：不到100元 5.9s → 20年 5.2s → 6地 9.2s</div></div>
+          <div class="tm">0:17.1 – 0:37.4 · 20.3s</div>
+        </div>
+        <div class="seg alt" style="flex:80;">
+          <div><div class="t">④ 片名落点</div><div class="d">主题卡「邹志鹏 · 支教二十年」（邹特写压暗背景）；音乐推满后渐出</div></div>
+          <div class="tm">0:37.4 – 0:45.4 · 8.0s</div>
+        </div>
+      </div>
+      <div class="ruler">
+        <div class="vo" style="left:1.3%"><span>VO1</span></div>
+        <div class="vo" style="left:18.9%"><span>VO2</span></div>
+        <div class="vo" style="left:41.2%"><span>VO3</span></div>
+        <div class="vo" style="left:54.2%"><span>VO4</span></div>
+        <div class="vo" style="left:65.7%"><span>VO5</span></div>
+        <div class="vo" style="left:86.4%"><span>VO6</span></div>
+      </div>
+    </div>
+
+    <div class="wall" style="margin-top:36px;">
+      <div class="fig rv"><img src="assets/pro_question.png" alt="序章设问卡" width="1920" height="1080">
+        <div class="cap">设问卡 ——「一个人，能为素不相识的孩子，付出到什么程度？」</div></div>
+      <div class="fig rv"><img src="assets/pro_fact1t.png" alt="事实卡文字层 不到100元" width="1920" height="1080">
+        <div class="cap">事实文字层（透明底）—— 压动态压暗 B-roll：不到100元</div></div>
+      <div class="fig rv"><img src="assets/pro_fact3t.png" alt="事实卡文字层 6地" width="1920" height="1080">
+        <div class="cap">事实文字层 —— 6 地：贵州 湖南 郏县 雷州 汝州 · 2000 多名学生</div></div>
+      <div class="fig rv"><img src="assets/pro_title.png" alt="序章主题卡" width="1920" height="1080">
+        <div class="cap">主题卡「邹志鹏 · 支教二十年」—— 邹特写压暗背景（亮度 0.30 + 柔化），8 秒缓出接入正片</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- SEC 07 · 渲染管线 -->
+<section>
+  <div class="wrap">
+    <div class="slate rv">
+      <div class="no">SEC 07 · Render</div>
+      <h2>渲染：一条 filter_complex 装配主片</h2>
+      <div class="dash"></div>
+      <div class="teaser">29:27 主片，一条命令——每个落点都是数据，每次重渲都可复现。</div>
+    </div>
+
+    <div class="chain rv">
+      <span class="node">纯净版 m4v</span><span class="arr">→</span>
+      <span class="node"><em>colortemperature 6000</em> 轻暖</span><span class="arr">→</span>
+      <span class="node">遮盖窗 <em>×2</em></span><span class="arr">→</span>
+      <span class="node">支教经历卡 <em>×6 层</em></span><span class="arr">→</span>
+      <span class="node"><em>ass</em> 字幕烧录</span><span class="arr">→</span>
+      <span class="node"><em>overlay ×10</em> 卡片落版</span><span class="arr">→</span>
+      <span class="node">yuv420p · bt709</span><span class="arr">→</span>
+      <span class="node">h264_nvenc <em>cq20</em></span>
+    </div>
+
+    <div class="cols" style="margin-top:12px;">
+      <div class="col rv">
+        <h4>四处修复</h4>
+        <ul>
+          <li><b>片头迁移</b>：原片 0–29.92s（蒙太奇 + 栏目片头）整段跳过；其中 26.88–29.92s 芥末黄栏目卡剪出，移到序章之前作 3 秒片头。</li>
+          <li><b>静止照片遮盖</b>：48.44–53.04s 为定格照片无内容，用课堂动态 B-roll 遮盖（eq 近似校色，窗口内同步抑制字幕）。</li>
+          <li><b>烧录字幕段替换</b>：1428–1453.4s 残留原片烧录字幕，用 Take3 同机位素片逐镜头替换（6 个镜头，素材偏移 1135.91s 对齐）。</li>
+          <li><b>旧尾声替换</b>：1793.70s 起的旧尾声由新片尾替代——build_ending.py 单独装配，与正片同质感同响度。</li>
+        </ul>
+      </div>
+      <div class="col rv">
+        <h4>落版与音频</h4>
+        <ul>
+          <li>10 组 overlay + 支教经历卡 6 层全部带 <b>alpha 淡入淡出</b>（0.4–0.5s）；经历卡常驻面板置于字幕层之下，五条经历逐条显现；数据卡、人名条、金句卡以 crop 取版落位。</li>
+          <li>字幕与卡片共用<b>原片时间坐标系</b>；试渲染 --ss 任意片段时，ASS 与落点自动平移。</li>
+          <li>音频：afade 入场 + <b>loudnorm 两遍法</b>（I=-16 / TP=-1 / LRA=11，linear）→ AAC 320k / 48kHz。</li>
+          <li>诚实注明：方案中的 vignette、胶片颗粒、章节进度角标，当前<b>未进滤镜链</b>——见「还缺什么」。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- SEC 08 · 凭证据做 -->
+<section>
+  <div class="wrap">
+    <div class="slate rv">
+      <div class="no">SEC 08 · Evidence</div>
+      <h2>凭证据做</h2>
+      <div class="dash"></div>
+      <div class="teaser">每一步改动都抽帧看结果——文字卡叠印位置、淡入淡出边界、画面质感，凭证据迭代。</div>
+      <p class="lead2">以下为定稿片尾段 <b>1812–1872s</b> 的逐点抽帧（尾声文字卡叠生活画面 + 钢琴配乐段），
+        核验卡片与画面的叠印关系与出入场节奏。</p>
+    </div>
+    <div class="frames">
+      <div class="fig rv"><img src="assets/fw_1814.jpg" alt="片尾抽帧 1814s" width="1280" height="720"><div class="cap">TC 00:30:14 · 文字卡叠印</div></div>
+      <div class="fig rv"><img src="assets/fw_1822.jpg" alt="片尾抽帧 1822s" width="1280" height="720"><div class="cap">TC 00:30:22 · 文字卡叠印</div></div>
+      <div class="fig rv"><img src="assets/fw_1830.jpg" alt="片尾抽帧 1830s" width="1280" height="720"><div class="cap">TC 00:30:30 · 段落转换</div></div>
+      <div class="fig rv"><img src="assets/fw_1838.jpg" alt="片尾抽帧 1838s" width="1280" height="720"><div class="cap">TC 00:30:38 · 数据段</div></div>
+      <div class="fig rv"><img src="assets/fw_1846.jpg" alt="片尾抽帧 1846s" width="1280" height="720"><div class="cap">TC 00:30:46 · 转折段</div></div>
+      <div class="fig rv"><img src="assets/fw_1854.jpg" alt="片尾抽帧 1854s" width="1280" height="720"><div class="cap">TC 00:30:54 · 回升段</div></div>
+      <div class="fig rv"><img src="assets/fw_1862.jpg" alt="片尾抽帧 1862s" width="1280" height="720"><div class="cap">TC 00:31:02 · 收束段</div></div>
+      <div class="fig rv"><img src="assets/fw_1868.jpg" alt="片尾抽帧 1868s" width="1280" height="720"><div class="cap">TC 00:31:08 · 收束段</div></div>
+      <div class="fig rv"><img src="assets/fw_1871.5.jpg" alt="片尾抽帧 1871.5s" width="1280" height="720"><div class="cap">TC 00:31:11 · 尾帧</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- SEC 09 · 交付清单 -->
+<section>
+  <div class="wrap">
+    <div class="slate rv">
+      <div class="no">SEC 09 · Deliverables</div>
+      <h2>交付清单</h2>
+      <div class="dash"></div>
+      <div class="teaser">五个成品文件——按「旁白」与「序章」两个维度组合，按需取用。</div>
+    </div>
+    <table class="dtable rv">
+      <tr><th>文件</th><th>日期</th><th>大小</th><th>说明</th></tr>
+      <tr><td class="f">邹志鹏-包装版-含尾声旁白-序章版.mp4</td><td class="s">2026-07-25</td><td class="s">1.3 GB</td>
+        <td><b style="color:var(--gold)">定稿</b>：片头 + 序章 + 正片 + 尾声旁白（31:12，本站 720p 预览版由此转码）</td></tr>
+      <tr><td class="f">邹志鹏-包装版-无旁白-序章版.mp4</td><td class="s">2026-07-25</td><td class="s">1.3 GB</td>
+        <td>定稿 · 无旁白备选</td></tr>
+      <tr><td class="f">邹志鹏-包装版-含尾声旁白.mp4</td><td class="s">2026-07-23</td><td class="s">2.1 GB</td>
+        <td>旧版：正片 + 尾声旁白（无序章、无片头）</td></tr>
+      <tr><td class="f">邹志鹏-包装版-无旁白.mp4</td><td class="s">2026-07-23</td><td class="s">2.1 GB</td>
+        <td>旧版：纯净正片（无序章、无片头、无旁白）</td></tr>
+      <tr><td class="f">邹志鹏-包装版.mp4</td><td class="s">2026-07-25</td><td class="s">1.2 GB</td>
+        <td>渲染母版（混音视频源）</td></tr>
+    </table>
+    <p class="dnote rv">成片规格：1920×1080 · 25p · H.264 High + AAC 320k · 响度 −16 LUFS / TP −1。
+      公网站点仅随附 720p 网页预览版，以上大文件不做公开分发。</p>
+  </div>
+</section>
+
+<!-- SEC 10 · 还缺什么 -->
+<section>
+  <div class="wrap">
+    <div class="slate rv">
+      <div class="no">SEC 10 · What's Missing</div>
+      <h2>我觉得还缺什么</h2>
+      <div class="dash"></div>
+      <div class="teaser">当前版本完整可交付，但离「打磨到底」还有距离——以下按优先级排。</div>
+    </div>
+    <div class="gaps">
+      <div class="gap rv"><div class="t">精华版短片未做</div>
+        <div class="d">方案承诺完整版之外剪一支 3–5 分钟传播短片（钩子 + 高光 + 结尾思考），适配短视频平台引流。</div>
+        <div class="tag">交付物</div></div>
+      <div class="gap rv"><div class="t">vignette / 颗粒 / 进度角标未进链</div>
+        <div class="d">柔暗角、时域胶片颗粒、章节进度角标在方案与脚本注释中均有设计，当前滤镜链尚未实施。</div>
+        <div class="tag">画面质感</div></div>
+      <div class="gap rv"><div class="t">四处章节过渡旁白未加</div>
+        <div class="d">方案设计 6 处旁白点位，实际落了序章 6 段 + 尾声 1 段；PART 01–04 的过渡仍由章节卡独自承担。</div>
+        <div class="tag">旁白</div></div>
+      <div class="gap rv"><div class="t">栏目片头较朴素</div>
+        <div class="d">目前直接沿用原片 3 秒芥末黄卡，未做品牌动效设计；若栏目方需要，可单独设计一支片头动画。</div>
+        <div class="tag">片头</div></div>
+      <div class="gap rv"><div class="t">字幕待完整通读</div>
+        <div class="d">925 条已过规则校对与纠错词典，但转写量大，边角错字需人工通读一遍终版字幕。</div>
+        <div class="tag">字幕</div></div>
+      <div class="gap rv"><div class="t">序章 B-roll 为近似校色</div>
+        <div class="d">静默快剪段用 eq 经验值近似 Rec.709，与正片 S-Log3→709 的精度不同；正式版宜走同一 LUT。</div>
+        <div class="tag">调色</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- SEC 11 · 版本演进 -->
+<section>
+  <div class="wrap">
+    <div class="slate rv">
+      <div class="no">SEC 11 · Versions</div>
+      <h2>版本演进</h2>
+      <div class="dash"></div>
+      <div class="teaser">方案先行，每一版都可复现、可回退。</div>
+    </div>
+    <div class="vers rv">
+      <div class="ver"><div class="v">V1.0 · 07-21</div>
+        <div class="d">包装方案定稿：字幕样式 A、章节卡套一、调色强度确认。</div></div>
+      <div class="ver"><div class="v">V1.2 · 07-21</div>
+        <div class="d">方案补旁白设计：6 处点位 + 文风规范（克制、书面但有温度）。</div></div>
+      <div class="ver"><div class="v">07-21 → 07-22</div>
+        <div class="d">重剪管线：四机位代理 + 四轮转写 + 语义标注，15 版粗剪产出 31:29 纯净版。</div></div>
+      <div class="ver"><div class="v">07-23</div>
+        <div class="d">卡片 / 字幕 / 人名条全套生成；首版渲染，四个交付变体出炉。</div></div>
+      <div class="ver"><div class="v">07-25 · 晚</div>
+        <div class="d">序章 v2 四段重构 + 6 段旁白；新片尾替换；修复混音 EOF 失声；重渲染序章版。</div></div>
+      <div class="ver cur"><div class="v">07-25 · 定稿</div>
+        <div class="d">栏目片头迁移（3s）+ 序章重排 45.4s 与连续音乐床 + 全部旁白改福哥克隆音色 + 支教经历卡重制（常驻面板逐条显现）+ 烧录字幕段素片替换 → <b>31:12 定稿</b>。</div></div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div>后期包装管线 · <span class="path">assets/render.py · gen_subs.py · gen_cards.py · build_prologue2.py · gen_vo_prologue_v2.py · mix_vo.py</span></div>
+    <div>姊妹篇 · <span class="path">《福哥和他的朋友们 · 邹志鹏期 — 剪辑工艺》</span></div>
+    <div class="flogo">
+      <svg width="21" height="14" viewBox="0 0 21 14" style="opacity:.75" aria-hidden="true"><polygon points="0,0 21,0 10.5,14" fill="#D4AF37"/></svg>
+      <span>GUANG · 本页为后期包装工艺展示 · 网页预览版 720p</span>
+    </div>
+  </div>
+</footer>
+
+<script>
+document.documentElement.classList.add('js');
+
+/* 顶部金色滚动进度线 */
+(function(){
+  var bar = document.getElementById('progress');
+  function upd(){
+    var h = document.documentElement;
+    var max = h.scrollHeight - h.clientHeight;
+    bar.style.width = (max > 0 ? (h.scrollTop / max) * 100 : 0) + '%';
+  }
+  addEventListener('scroll', upd, {passive:true});
+  addEventListener('resize', upd);
+  upd();
+})();
+
+/* 区块滚动淡入（prefers-reduced-motion 时 CSS 已禁用动画） */
+(function(){
+  if(!('IntersectionObserver' in window)){
+    document.querySelectorAll('.rv').forEach(function(el){ el.classList.add('on'); });
+    return;
+  }
+  var io = new IntersectionObserver(function(entries){
+    entries.forEach(function(e){
+      if(e.isIntersecting){ e.target.classList.add('on'); io.unobserve(e.target); }
+    });
+  }, {threshold:.12});
+  document.querySelectorAll('.rv').forEach(function(el){ io.observe(el); });
+})();
+</script>
+
+</body>
+</html>

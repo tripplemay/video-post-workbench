@@ -11,3 +11,8 @@ workers_dev = true
 [[kv_namespaces]]
 binding = "COMMENTS"
 id = "99c2028c678b4d4e9d8617b03868f62c"
+
+# R2 桶：网页预览视频（管理上传接口 /upload/<slug> 写入 <slug>/film_web.mp4）
+[[r2_buckets]]
+binding = "MEDIA"
+bucket_name = "guangai-media"

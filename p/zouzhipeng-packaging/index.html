@@ -131,6 +131,15 @@ body::after{
 .review .rmeta .del:hover{color:#c77;}
 .review .rtext{margin-top:8px;font-size:14px;color:var(--gray);line-height:1.8;white-space:pre-wrap;word-break:break-word;}
 .review .rempty{padding:22px;font-family:var(--mono);font-size:11.5px;color:var(--gray2);letter-spacing:.12em;}
+.review input[type=file]{font-family:var(--mono);font-size:12px;color:var(--gray);}
+.review input[type=file]::file-selector-button{background:var(--ink3);color:var(--paper);
+  border:1px solid var(--line);font-family:var(--mono);font-size:11px;letter-spacing:.1em;
+  padding:7px 14px;margin-right:12px;cursor:pointer;}
+.review input[type=file]::file-selector-button:hover{border-color:var(--gold-dim);}
+.upbar{height:5px;background:var(--ink);border:1px solid var(--line2);margin-top:16px;}
+.upbar i{display:block;height:100%;width:0;background:var(--gold);transition:width .25s ease;}
+.upstat{font-family:var(--mono);font-size:11px;color:var(--gray2);letter-spacing:.06em;
+  margin-top:9px;line-height:1.7;}
 
 /* 章节头 · 片中章节卡同款版式 */
 section{padding:92px 0;border-top:1px solid var(--line2);}
@@ -362,6 +371,21 @@ html.js .rv.on{opacity:1;transform:none;}
         <textarea id="reviewText" maxlength="2000" placeholder="写下审片意见：落点、节奏、字幕、旁白……勾选时间码后会自动记录当前播放位置，点击时间码可跳播。"></textarea>
       </form>
       <ul class="rlist" id="reviewList"></ul>
+    </div>
+
+    <div class="review" id="uploadPanel" style="display:none">
+      <div class="rhead">
+        <span class="t">Admin · 上传预览视频</span>
+        <span class="c">R2 · zouzhipeng-packaging/film_web.mp4</span>
+      </div>
+      <div class="rform">
+        <div class="rrow">
+          <input type="file" id="upFile" accept="video/mp4">
+          <button type="button" id="upBtn">开始上传</button>
+        </div>
+        <div class="upbar"><i id="upBar"></i></div>
+        <div class="upstat" id="upStat">选择转码好的 720p film_web.mp4。16MB 分片上传，网络中断后重选同一文件再点按钮即可断点续传。</div>
+      </div>
     </div>
   </div>
 </header>
@@ -988,6 +1012,146 @@ document.documentElement.classList.add('js');
 
   note('加载中…');
   refresh();
+})();
+
+/* 管理员上传面板：分片上传到 R2，断点存本机 localStorage，可随时重试续传 */
+(function(){
+  var panel = document.getElementById('uploadPanel');
+  if(!panel) return;
+  var adminToken = '';
+  try{ adminToken = localStorage.getItem('review-admin') || ''; }catch(e){}
+  if(!adminToken) return;  /* 仅管理员（带 ?review-admin= 访问过）可见 */
+  panel.style.display = '';
+
+  var API = 'https://review-comments.tripple.workers.dev/upload/zouzhipeng-packaging';
+  var CHUNK = 16 * 1024 * 1024;  /* 16MB，与 tools/upload_video.py 一致 */
+  var STATE_KEY = 'upload-state:zouzhipeng-packaging';
+  var fileEl = document.getElementById('upFile');
+  var btn = document.getElementById('upBtn');
+  var bar = document.getElementById('upBar');
+  var stat = document.getElementById('upStat');
+  var uploading = false;
+
+  function loadState(){
+    try{ var v = JSON.parse(localStorage.getItem(STATE_KEY) || 'null'); return v && typeof v === 'object' ? v : null; }
+    catch(e){ return null; }
+  }
+  function saveState(s){ try{ localStorage.setItem(STATE_KEY, JSON.stringify(s)); }catch(e){} }
+  function clearState(){ try{ localStorage.removeItem(STATE_KEY); }catch(e){} }
+  function setStat(t){ stat.textContent = t; }
+  function fmtMB(n){ return (n / 1048576).toFixed(1) + 'MB'; }
+
+  fileEl.addEventListener('change', function(){
+    var f = fileEl.files && fileEl.files[0];
+    if(!f) return;
+    var st = loadState();
+    if(st && st.uploadId && st.name === f.name && st.size === f.size){
+      var done = Object.keys(st.parts).length;
+      btn.textContent = '继续上传（断点续传）';
+      setStat('检测到未完成的任务：已传 ' + done + ' 个分片，点击按钮从中断处继续。');
+    }else{
+      btn.textContent = '开始上传';
+      setStat('已选择 ' + f.name + '（' + fmtMB(f.size) + '），共 ' + Math.ceil(f.size / CHUNK) + ' 个分片。');
+    }
+  });
+
+  function putPart(uploadId, n, blob){
+    var tries = 5;
+    function attempt(i){
+      return fetch(API + '?op=part&uploadId=' + encodeURIComponent(uploadId) + '&n=' + n, {
+        method: 'PUT',
+        headers: { 'X-Admin-Token': adminToken },
+        body: blob
+      }).then(function(r){
+        if(!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+      }).then(function(d){ return d.etag; })
+      .catch(function(e){
+        if(i >= tries - 1) throw e;
+        setStat('分片 ' + n + ' 失败，' + (2 * (i + 1)) + 's 后重试（第 ' + (i + 2) + ' 次）…');
+        return new Promise(function(res){ setTimeout(res, 2000 * (i + 1)); }).then(function(){
+          return attempt(i + 1);
+        });
+      });
+    }
+    return attempt(0);
+  }
+
+  function upload(f){
+    var st = loadState();
+    var start;
+    if(st && st.uploadId && st.name === f.name && st.size === f.size){
+      start = Promise.resolve(st);
+    }else{
+      st = { name: f.name, size: f.size, uploadId: '', parts: {} };
+      start = fetch(API + '?op=start', {
+        method: 'POST', headers: { 'X-Admin-Token': adminToken }
+      }).then(function(r){
+        if(!r.ok) throw new Error('创建上传任务失败 HTTP ' + r.status);
+        return r.json();
+      }).then(function(d){
+        st.uploadId = d.uploadId;
+        saveState(st);
+        return st;
+      });
+    }
+    return start.then(function(st){
+      var nparts = Math.ceil(f.size / CHUNK);
+      var chain = Promise.resolve();
+      var done = Object.keys(st.parts).length;
+      function progress(){
+        bar.style.width = (done / nparts * 100).toFixed(1) + '%';
+        setStat('上传中：分片 ' + done + ' / ' + nparts + '（' + fmtMB(Math.min(done * CHUNK, f.size)) + ' / ' + fmtMB(f.size) + '）');
+      }
+      progress();
+      for(var n = 1; n <= nparts; n++){
+        (function(n){
+          if(st.parts[n]) return;
+          chain = chain.then(function(){
+            var blob = f.slice((n - 1) * CHUNK, Math.min(n * CHUNK, f.size));
+            return putPart(st.uploadId, n, blob).then(function(etag){
+              st.parts[n] = etag;
+              saveState(st);
+              done++;
+              progress();
+            });
+          });
+        })(n);
+      }
+      return chain.then(function(){ return st; });
+    }).then(function(st){
+      setStat('分片完成，合并中…');
+      var parts = Object.keys(st.parts).map(function(k){ return parseInt(k, 10); })
+        .sort(function(a, b){ return a - b; })
+        .map(function(n){ return { PartNumber: n, ETag: st.parts[n] }; });
+      return fetch(API + '?op=complete', {
+        method: 'POST',
+        headers: { 'X-Admin-Token': adminToken, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ uploadId: st.uploadId, parts: parts })
+      }).then(function(r){
+        if(!r.ok) throw new Error('合并失败 HTTP ' + r.status);
+        clearState();
+        bar.style.width = '100%';
+        btn.textContent = '开始上传';
+        setStat('上传完成：https://cdn.guangai.ai/zouzhipeng-packaging/film_web.mp4 已更新（CDN 缓存可能有约 1 分钟延迟）。');
+      });
+    });
+  }
+
+  btn.addEventListener('click', function(){
+    var f = fileEl.files && fileEl.files[0];
+    if(!f){ setStat('请先选择文件。'); return; }
+    if(uploading) return;
+    uploading = true;
+    btn.disabled = true;
+    upload(f).catch(function(e){
+      setStat('上传中断：' + e.message + '。网络恢复后重新选择同一文件，点「继续上传」即可续传（已完成的分片不会重传）。');
+      btn.textContent = '继续上传（断点续传）';
+    }).then(function(){
+      uploading = false;
+      btn.disabled = false;
+    });
+  });
 })();
 </script>
 

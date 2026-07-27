@@ -30,20 +30,75 @@ function publicItem(x) {
   return rest;
 }
 
+// 管理上传：R2 分片上传，目标固定为 <slug>/film_web.mp4（网页预览视频）
+// op=start 创建任务 → op=part&n=N（PUT 单个分片）→ op=complete 合并 → op=abort 放弃
+async function handleUpload(request, env, url, slug, cors) {
+  if (!env.ADMIN_TOKEN || request.headers.get('X-Admin-Token') !== env.ADMIN_TOKEN) {
+    return json({ error: 'forbidden' }, 403, cors);
+  }
+  if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(slug)) return json({ error: 'bad slug' }, 400, cors);
+  const key = slug + '/film_web.mp4';
+  const op = url.searchParams.get('op') || '';
+  const uploadId = url.searchParams.get('uploadId') || '';
+
+  if (op === 'start' && request.method === 'POST') {
+    const up = await env.MEDIA.createMultipartUpload(key, {
+      httpMetadata: { contentType: 'video/mp4' },
+    });
+    return json({ uploadId: up.uploadId }, 200, cors);
+  }
+
+  if (op === 'part' && request.method === 'PUT') {
+    const n = parseInt(url.searchParams.get('n') || '0', 10);
+    if (!uploadId || !(n >= 1 && n <= 10000)) return json({ error: 'bad part' }, 400, cors);
+    const up = env.MEDIA.resumeMultipartUpload(key, uploadId);
+    const part = await up.uploadPart(n, request.body);
+    return json({ etag: part.etag }, 200, cors);
+  }
+
+  if (op === 'complete' && request.method === 'POST') {
+    let body;
+    try { body = await request.json(); } catch { return json({ error: 'bad json' }, 400, cors); }
+    if (!body.uploadId || !Array.isArray(body.parts)) return json({ error: 'bad parts' }, 400, cors);
+    // 兼容 S3 风格（PartNumber/ETag）与 binding 风格（partNumber/etag）
+    const parts = body.parts.map((p) => ({
+      partNumber: p.partNumber || p.PartNumber,
+      etag: p.etag || p.ETag,
+    }));
+    const up = env.MEDIA.resumeMultipartUpload(key, String(body.uploadId));
+    await up.complete(parts);
+    return json({ ok: true, key, url: 'https://cdn.guangai.ai/' + key }, 200, cors);
+  }
+
+  if (op === 'abort' && request.method === 'POST') {
+    let body = {};
+    try { body = await request.json(); } catch { /* 忽略 */ }
+    const up = env.MEDIA.resumeMultipartUpload(key, String(body.uploadId || uploadId));
+    await up.abort();
+    return json({ ok: true }, 200, cors);
+  }
+
+  return json({ error: 'bad op' }, 400, cors);
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     const origin = request.headers.get('Origin') || '';
     const cors = {
       'Access-Control-Allow-Origin': ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0],
-      'Access-Control-Allow-Methods': 'GET,POST,DELETE,OPTIONS',
+      'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS',
       'Access-Control-Allow-Headers': 'Content-Type,X-Admin-Token,X-Delete-Token',
       'Access-Control-Max-Age': '86400',
     };
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors });
 
+    // 管理上传：/upload/<slug> —— R2 分片上传 <slug>/film_web.mp4，全部需 X-Admin-Token
+    const segs = url.pathname.replace(/^\/+|\/+$/g, '').split('/');
+    if (segs[0] === 'upload') return handleUpload(request, env, url, segs[1] || '', cors);
+
     // 路径即项目 slug：/<slug>，如 /zouzhipeng-packaging
-    const slug = url.pathname.replace(/^\/+|\/+$/g, '');
+    const slug = segs.join('/');
     if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(slug)) return json({ error: 'bad slug' }, 400, cors);
     const key = 'comments:' + slug;
 

@@ -46,3 +46,16 @@ curl https://review-comments.tripple.workers.dev/zouzhipeng-packaging
 - **管理员删任意**：在页面 URL 后加 `?review-admin=<ADMIN_TOKEN>` 访问一次，浏览器会记住令牌
   并对所有评论显示「删除」按钮（删除请求带 `X-Admin-Token` 头，Worker 校验）。
   再访问 `?review-admin=` （空值）可清除本机令牌。
+
+## 管理员上传预览视频（浏览器分片上传）
+
+`/upload/<slug>` 一组接口把 `<slug>/film_web.mp4` 分片写入 R2（binding `MEDIA` → guangai-media），
+全部需要 `X-Admin-Token`，用于在网页上直接更新预览视频（替代 tools/upload_video.py，网络不稳时可断点续传）：
+
+- `POST /upload/<slug>?op=start` → `{ uploadId }` 创建分片任务
+- `PUT  /upload/<slug>?op=part&uploadId=..&n=N`（body 为分片内容）→ `{ etag }`
+- `POST /upload/<slug>?op=complete`，body `{ uploadId, parts:[{PartNumber,ETag}] }` → 合并完成
+- `POST /upload/<slug>?op=abort`，body `{ uploadId }` → 放弃任务
+
+项目页在持有管理令牌时会显示「Admin · 上传预览视频」面板：选择本地转码好的 720p
+`film_web.mp4`，按 16MB 分片上传，断点状态存浏览器 localStorage，中断后重选同一文件即可续传。

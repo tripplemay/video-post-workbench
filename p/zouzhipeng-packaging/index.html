@@ -339,7 +339,7 @@ html.js .rv.on{opacity:1;transform:none;}
 
     <div class="monitor rv">
       <video controls preload="metadata" playsinline poster="assets/poster.jpg">
-        <source src="https://cdn.guangai.ai/zouzhipeng-packaging/film_web.mp4" type="video/mp4">
+        <source src="https://cdn.guangai.ai/zouzhipeng-packaging/film_web.mp4?v=20260731" type="video/mp4">
         当前浏览器无法内嵌播放
       </video>
       <div class="bar">
@@ -384,7 +384,7 @@ html.js .rv.on{opacity:1;transform:none;}
           <button type="button" id="upBtn">开始上传</button>
         </div>
         <div class="upbar"><i id="upBar"></i></div>
-        <div class="upstat" id="upStat">选择转码好的 720p film_web.mp4。16MB 分片上传，网络中断后重选同一文件再点按钮即可断点续传。</div>
+        <div class="upstat" id="upStat">选择转码好的 720p film_web.mp4。5MB 小分片上传（适配弱网），网络中断后重选同一文件再点按钮即可断点续传。</div>
       </div>
     </div>
   </div>
@@ -1024,7 +1024,7 @@ document.documentElement.classList.add('js');
   panel.style.display = '';
 
   var API = 'https://review-comments.tripple.workers.dev/upload/zouzhipeng-packaging';
-  var CHUNK = 16 * 1024 * 1024;  /* 16MB，与 tools/upload_video.py 一致 */
+  var CHUNK = 5 * 1024 * 1024;  /* 5MB（R2 分片下限）：弱网出口单请求越小越容易传成 */
   var STATE_KEY = 'upload-state:zouzhipeng-packaging';
   var fileEl = document.getElementById('upFile');
   var btn = document.getElementById('upBtn');
@@ -1133,7 +1133,7 @@ document.documentElement.classList.add('js');
         clearState();
         bar.style.width = '100%';
         btn.textContent = '开始上传';
-        setStat('上传完成：https://cdn.guangai.ai/zouzhipeng-packaging/film_web.mp4 已更新（CDN 缓存可能有约 1 分钟延迟）。');
+        setStat('上传完成：https://cdn.guangai.ai/zouzhipeng-packaging/film_web.mp4 已更新。注意 CDN 缓存最长 4 小时，线上立即生效需给 <source> 地址加版本号（如 ?v=日期）。');
       });
     });
   }

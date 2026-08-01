@@ -339,7 +339,7 @@ html.js .rv.on{opacity:1;transform:none;}
 
     <div class="monitor rv">
       <video controls preload="metadata" playsinline poster="assets/poster.jpg">
-        <source src="https://cdn.guangai.ai/zouzhipeng-packaging/film_web.mp4?v=20260731b" type="video/mp4">
+        <source src="https://guanghe-ai.oss-cn-chengdu.aliyuncs.com/zouzhipeng-packaging/film_web.mp4" type="video/mp4">
         当前浏览器无法内嵌播放
       </video>
       <div class="bar">
@@ -376,7 +376,7 @@ html.js .rv.on{opacity:1;transform:none;}
     <div class="review" id="uploadPanel" style="display:none">
       <div class="rhead">
         <span class="t">Admin · 上传预览视频</span>
-        <span class="c">R2 · zouzhipeng-packaging/film_web.mp4</span>
+        <span class="c">OSS · zouzhipeng-packaging/film_web.mp4</span>
       </div>
       <div class="rform">
         <div class="rrow">
@@ -384,7 +384,7 @@ html.js .rv.on{opacity:1;transform:none;}
           <button type="button" id="upBtn">开始上传</button>
         </div>
         <div class="upbar"><i id="upBar"></i></div>
-        <div class="upstat" id="upStat">选择转码好的 720p film_web.mp4。5MB 小分片上传（适配弱网），网络中断后重选同一文件再点按钮即可断点续传。</div>
+        <div class="upstat" id="upStat">选择转码好的 720p film_web.mp4。8MB 分片直连阿里云 OSS（国内链路稳定），网络中断后重选同一文件再点按钮即可断点续传。</div>
       </div>
     </div>
   </div>
@@ -1014,7 +1014,7 @@ document.documentElement.classList.add('js');
   refresh();
 })();
 
-/* 管理员上传面板：分片上传到 R2，断点存本机 localStorage，可随时重试续传 */
+/* 管理员上传面板：Worker 签发 OSS 预签名 URL，浏览器分片直连阿里云 OSS，断点存本机 localStorage */
 (function(){
   var panel = document.getElementById('uploadPanel');
   if(!panel) return;
@@ -1024,7 +1024,10 @@ document.documentElement.classList.add('js');
   panel.style.display = '';
 
   var API = 'https://review-comments.tripple.workers.dev/upload/zouzhipeng-packaging';
-  var CHUNK = 5 * 1024 * 1024;  /* 5MB（R2 分片下限）：弱网出口单请求越小越容易传成 */
+  var OSS_URL = 'https://guanghe-ai.oss-cn-chengdu.aliyuncs.com/zouzhipeng-packaging/film_web.mp4';
+  var CHUNK = 8 * 1024 * 1024;  /* 8MB：国内直连 OSS，分片不必刻意压小 */
+  var SIGN_BATCH = 20;          /* 每批预签名分片数（有效期 1h，过期自动重签） */
+  var PARALLEL = 2;             /* 直连 OSS 的并发分片数 */
   var STATE_KEY = 'upload-state:zouzhipeng-packaging';
   var fileEl = document.getElementById('upFile');
   var btn = document.getElementById('upBtn');
@@ -1055,18 +1058,37 @@ document.documentElement.classList.add('js');
     }
   });
 
-  function putPart(uploadId, n, blob){
+  function apiPost(params, obj){
+    return fetch(API + params, {
+      method: 'POST',
+      headers: obj ? { 'X-Admin-Token': adminToken, 'Content-Type': 'application/json' }
+                   : { 'X-Admin-Token': adminToken },
+      body: obj ? JSON.stringify(obj) : undefined
+    }).then(function(r){
+      if(!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    });
+  }
+
+  function signParts(uploadId, from, count){
+    return fetch(API + '?op=sign&uploadId=' + encodeURIComponent(uploadId) + '&from=' + from + '&count=' + count, {
+      headers: { 'X-Admin-Token': adminToken }
+    }).then(function(r){
+      if(!r.ok) throw new Error('签名失败 HTTP ' + r.status);
+      return r.json();
+    }).then(function(d){ return d.urls; });
+  }
+
+  /* PUT 单分片直连 OSS。body 必须是无 MIME type 的 Blob——预签名不含 Content-Type，
+     浏览器给视频文件自动带上 video/mp4 会导致签名不符 403 */
+  function putPart(url, blob, n){
+    var body = new Blob([blob]);
     var tries = 5;
     function attempt(i){
-      return fetch(API + '?op=part&uploadId=' + encodeURIComponent(uploadId) + '&n=' + n, {
-        method: 'PUT',
-        headers: { 'X-Admin-Token': adminToken },
-        body: blob
-      }).then(function(r){
+      return fetch(url, { method: 'PUT', body: body }).then(function(r){
         if(!r.ok) throw new Error('HTTP ' + r.status);
-        return r.json();
-      }).then(function(d){ return d.etag; })
-      .catch(function(e){
+        return r.headers.get('ETag');
+      }).catch(function(e){
         if(i >= tries - 1) throw e;
         setStat('分片 ' + n + ' 失败，' + (2 * (i + 1)) + 's 后重试（第 ' + (i + 2) + ' 次）…');
         return new Promise(function(res){ setTimeout(res, 2000 * (i + 1)); }).then(function(){
@@ -1084,12 +1106,7 @@ document.documentElement.classList.add('js');
       start = Promise.resolve(st);
     }else{
       st = { name: f.name, size: f.size, uploadId: '', parts: {} };
-      start = fetch(API + '?op=start', {
-        method: 'POST', headers: { 'X-Admin-Token': adminToken }
-      }).then(function(r){
-        if(!r.ok) throw new Error('创建上传任务失败 HTTP ' + r.status);
-        return r.json();
-      }).then(function(d){
+      start = apiPost('?op=start').then(function(d){
         st.uploadId = d.uploadId;
         saveState(st);
         return st;
@@ -1097,43 +1114,58 @@ document.documentElement.classList.add('js');
     }
     return start.then(function(st){
       var nparts = Math.ceil(f.size / CHUNK);
-      var chain = Promise.resolve();
       var done = Object.keys(st.parts).length;
+      var failed = null;
+      var todo = [];
+      for(var n = 1; n <= nparts; n++){ if(!st.parts[n]) todo.push(n); }
+      var signed = {};
       function progress(){
         bar.style.width = (done / nparts * 100).toFixed(1) + '%';
         setStat('上传中：分片 ' + done + ' / ' + nparts + '（' + fmtMB(Math.min(done * CHUNK, f.size)) + ' / ' + fmtMB(f.size) + '）');
       }
-      progress();
-      for(var n = 1; n <= nparts; n++){
-        (function(n){
-          if(st.parts[n]) return;
-          chain = chain.then(function(){
-            var blob = f.slice((n - 1) * CHUNK, Math.min(n * CHUNK, f.size));
-            return putPart(st.uploadId, n, blob).then(function(etag){
-              st.parts[n] = etag;
-              saveState(st);
-              done++;
-              progress();
-            });
-          });
-        })(n);
+      /* 确保分片 n 有预签名；以 n 为起点批量签发，覆盖后续分片 */
+      function ensureSigned(n){
+        if(signed[n]) return Promise.resolve();
+        return signParts(st.uploadId, n, SIGN_BATCH).then(function(urls){
+          for(var k in urls) signed[k] = urls[k];
+        });
       }
-      return chain.then(function(){ return st; });
+      function worker(){
+        if(failed) return Promise.resolve();
+        var n = todo.shift();
+        if(n === undefined) return Promise.resolve();
+        return ensureSigned(n).then(function(){
+          var blob = f.slice((n - 1) * CHUNK, Math.min(n * CHUNK, f.size));
+          return putPart(signed[n], blob, n).catch(function(e){
+            delete signed[n];  /* 预签名可能过期，重签后再试一次 */
+            return ensureSigned(n).then(function(){ return putPart(signed[n], blob, n); });
+          });
+        }).then(function(etag){
+          st.parts[n] = etag;
+          saveState(st);
+          done++;
+          progress();
+          return worker();
+        }).catch(function(e){ failed = e; });
+      }
+      progress();
+      var lanes = [];
+      for(var i = 0; i < PARALLEL; i++) lanes.push(worker());
+      return Promise.all(lanes).then(function(){
+        if(failed) throw failed;
+        return st;
+      });
     }).then(function(st){
       setStat('分片完成，合并中…');
       var parts = Object.keys(st.parts).map(function(k){ return parseInt(k, 10); })
         .sort(function(a, b){ return a - b; })
         .map(function(n){ return { PartNumber: n, ETag: st.parts[n] }; });
-      return fetch(API + '?op=complete', {
-        method: 'POST',
-        headers: { 'X-Admin-Token': adminToken, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ uploadId: st.uploadId, parts: parts })
-      }).then(function(r){
-        if(!r.ok) throw new Error('合并失败 HTTP ' + r.status);
+      return apiPost('?op=complete', { uploadId: st.uploadId, parts: parts }).then(function(d){
+        if(d.size != null && d.size !== f.size) throw new Error('大小校验失败：远端 ' + d.size + ' ≠ 本地 ' + f.size);
         clearState();
         bar.style.width = '100%';
         btn.textContent = '开始上传';
-        setStat('上传完成：https://cdn.guangai.ai/zouzhipeng-packaging/film_web.mp4 已更新。注意 CDN 缓存最长 4 小时，线上立即生效需给 <source> 地址加版本号（如 ?v=日期）。');
+        setStat('上传完成：' + OSS_URL + ' 已更新（同名覆盖即时生效，无需版本号）。');
       });
     });
   }

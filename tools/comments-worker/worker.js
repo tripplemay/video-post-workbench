@@ -2,6 +2,10 @@
 // 存储：Cloudflare KV，key = comments:<slug>，value = JSON 数组
 // 匿名删除权：提交方生成随机删除令牌，仅存其 SHA-256 哈希（h 字段）；GET 不返回 h，
 // 删除时校验 sha256(X-Delete-Token) === h，因此只有持有令牌的提交者本人（或管理员）可删。
+//
+// 管理上传：浏览器 → 阿里云 OSS 直传（guanghe-ai，成都）。Worker 只做控制面：
+// 代签 Init/Complete/Abort/Delete 与分片预签名 URL，数据面（分片 PUT）浏览器直连 OSS，
+// 不经过 Worker —— 上传速度取决于用户到 OSS 的国内链路，与 CF 边缘无关。
 const ALLOWED_ORIGINS = [
   'https://video.guangai.ai',
   'http://localhost:8000',
@@ -11,6 +15,8 @@ const MAX_NAME = 24;
 const MAX_TEXT = 2000;
 const MAX_PER_SLUG = 500; // 每个项目最多保留的意见条数（最旧的被淘汰）
 const HASH_RE = /^[0-9a-f]{64}$/;
+const KEY_RE = /^[a-z0-9][a-z0-9/_-]{0,127}\.mp4$/;
+const PRESIGN_TTL = 3600; // 分片预签名 URL 有效期（秒）
 
 function json(data, status, corsHeaders) {
   return new Response(JSON.stringify(data), {
@@ -30,52 +36,131 @@ function publicItem(x) {
   return rest;
 }
 
-// 管理上传：R2 分片上传，目标固定为 <slug>/film_web.mp4（网页预览视频）
-// op=start 创建任务 → op=part&n=N（PUT 单个分片）→ op=complete 合并 → op=abort 放弃
+// ---- OSS V1 签名 ----
+function quoteKey(key) {
+  return key.split('/').map(encodeURIComponent).join('/');
+}
+
+async function hmacSha1B64(secret, text) {
+  const key = await crypto.subtle.importKey(
+    'raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-1' }, false, ['sign']);
+  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(text));
+  return btoa(String.fromCharCode(...new Uint8Array(sig)));
+}
+
+function ossHost(env) {
+  return `${env.OSS_BUCKET}.${env.OSS_ENDPOINT}`;
+}
+
+// 头部鉴权调用 OSS（Init/Complete/Abort/Delete/ACL 等小请求）
+// ossHeaders 里只有 x-oss- 前缀的头才进入签名（CanonicalizedOSSHeaders），全部头都会发送
+async function ossCall(env, verb, key, sub, body, ctype, ossHeaders) {
+  const qkey = quoteKey(key);
+  const date = new Date().toUTCString();
+  const ch = Object.keys(ossHeaders || {})
+    .filter((k) => k.toLowerCase().startsWith('x-oss-'))
+    .map((k) => k.toLowerCase()).sort()
+    .map((k) => `${k}:${ossHeaders[k]}\n`).join('');
+  const resource = `/${env.OSS_BUCKET}/${qkey}` + (sub ? `?${sub}` : '');
+  const sts = `${verb}\n\n${ctype || ''}\n${date}\n${ch}${resource}`;
+  const sig = await hmacSha1B64(env.OSS_ACCESS_KEY_SECRET, sts);
+  const headers = {
+    'Date': date,
+    'Authorization': `OSS ${env.OSS_ACCESS_KEY_ID}:${sig}`,
+    ...(ossHeaders || {}),
+  };
+  if (ctype) headers['Content-Type'] = ctype;
+  return fetch(`https://${ossHost(env)}/${qkey}` + (sub ? `?${sub}` : ''), {
+    method: verb, headers, body: body || undefined,
+  });
+}
+
+// 分片预签名 URL（查询串鉴权，浏览器直连 PUT）
+async function ossPresignPart(env, key, uploadId, n, expires) {
+  const qkey = quoteKey(key);
+  const sub = `partNumber=${n}&uploadId=${uploadId}`;
+  const sts = `PUT\n\n\n${expires}\n/${env.OSS_BUCKET}/${qkey}?${sub}`;
+  const sig = await hmacSha1B64(env.OSS_ACCESS_KEY_SECRET, sts);
+  return `https://${ossHost(env)}/${qkey}?${sub}&Expires=${expires}` +
+    `&OSSAccessKeyId=${encodeURIComponent(env.OSS_ACCESS_KEY_ID)}` +
+    `&Signature=${encodeURIComponent(sig)}`;
+}
+
+// 管理上传：OSS 分片上传控制面。op=start 创建 → op=sign 取分片预签名 → 浏览器直传 →
+// op=complete 合并（含公共读 ACL 与 size 校验）→ op=abort 放弃 → op=delete 删除对象
 async function handleUpload(request, env, url, slug, cors) {
   if (!env.ADMIN_TOKEN || request.headers.get('X-Admin-Token') !== env.ADMIN_TOKEN) {
     return json({ error: 'forbidden' }, 403, cors);
   }
   if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(slug)) return json({ error: 'bad slug' }, 400, cors);
-  const key = slug + '/film_web.mp4';
+  if (!env.OSS_ACCESS_KEY_ID || !env.OSS_BUCKET) return json({ error: 'oss not configured' }, 500, cors);
+  const key = url.searchParams.get('key') || slug + '/film_web.mp4';
+  if (!KEY_RE.test(key)) return json({ error: 'bad key' }, 400, cors);
   const op = url.searchParams.get('op') || '';
   const uploadId = url.searchParams.get('uploadId') || '';
+  const publicUrl = `https://${ossHost(env)}/${quoteKey(key)}`;
 
   if (op === 'start' && request.method === 'POST') {
-    const up = await env.MEDIA.createMultipartUpload(key, {
-      httpMetadata: { contentType: 'video/mp4' },
-    });
-    return json({ uploadId: up.uploadId }, 200, cors);
+    const r = await ossCall(env, 'POST', key, 'uploads', null, 'video/mp4');
+    const text = await r.text();
+    if (!r.ok) return json({ error: 'oss-error', detail: text.slice(0, 300) }, 502, cors);
+    const m = text.match(/<UploadId>([^<]+)<\/UploadId>/);
+    if (!m) return json({ error: 'oss-error', detail: 'no UploadId' }, 502, cors);
+    return json({ uploadId: m[1] }, 200, cors);
   }
 
-  if (op === 'part' && request.method === 'PUT') {
-    const n = parseInt(url.searchParams.get('n') || '0', 10);
-    if (!uploadId || !(n >= 1 && n <= 10000)) return json({ error: 'bad part' }, 400, cors);
-    const up = env.MEDIA.resumeMultipartUpload(key, uploadId);
-    const part = await up.uploadPart(n, request.body);
-    return json({ etag: part.etag }, 200, cors);
+  if (op === 'sign') {
+    const from = parseInt(url.searchParams.get('from') || '0', 10);
+    const count = Math.min(parseInt(url.searchParams.get('count') || '20', 10), 100);
+    if (!uploadId || !(from >= 1)) return json({ error: 'bad sign' }, 400, cors);
+    const expires = Math.floor(Date.now() / 1000) + PRESIGN_TTL;
+    const urls = {};
+    for (let n = from; n < from + count; n++) {
+      urls[n] = await ossPresignPart(env, key, uploadId, n, expires);
+    }
+    return json({ urls, expires }, 200, cors);
   }
 
   if (op === 'complete' && request.method === 'POST') {
     let body;
     try { body = await request.json(); } catch { return json({ error: 'bad json' }, 400, cors); }
     if (!body.uploadId || !Array.isArray(body.parts)) return json({ error: 'bad parts' }, 400, cors);
-    // 兼容 S3 风格（PartNumber/ETag）与 binding 风格（partNumber/etag）
     const parts = body.parts.map((p) => ({
-      partNumber: p.partNumber || p.PartNumber,
-      etag: p.etag || p.ETag,
+      n: p.partNumber || p.PartNumber,
+      e: String(p.etag || p.ETag || ''),
     }));
-    const up = env.MEDIA.resumeMultipartUpload(key, String(body.uploadId));
-    await up.complete(parts);
-    return json({ ok: true, key, url: 'https://cdn.guangai.ai/' + key }, 200, cors);
+    const xml = '<CompleteMultipartUpload>' + parts.map((p) =>
+      `<Part><PartNumber>${p.n}</PartNumber><ETag>${p.e.startsWith('"') ? p.e : `"${p.e}"`}</ETag></Part>`
+    ).join('') + '</CompleteMultipartUpload>';
+    const r = await ossCall(env, 'POST', key, `uploadId=${encodeURIComponent(body.uploadId)}`,
+      xml, 'application/xml');
+    const text = await r.text();
+    if (r.status === 404) return json({ error: 'upload-not-found', detail: text.slice(0, 300) }, 409, cors);
+    if (!r.ok) return json({ error: 'oss-error', detail: text.slice(0, 300) }, 502, cors);
+    // 预览对象需匿名可读（Init 不支持设 ACL，Complete 后单独设置）
+    await ossCall(env, 'PUT', key, 'acl', null, '', { 'x-oss-object-acl': 'public-read' });
+    // HEAD 在 Workers 里拿不到 Content-Length，改用 Range GET 从 Content-Range 解析总大小
+    const probe = await ossCall(env, 'GET', key, '', null, '', { 'Range': 'bytes=0-0' });
+    const cr = probe.headers.get('Content-Range') || '';
+    const cm = cr.match(/\/(\d+)\s*$/);
+    const size = probe.ok && cm ? parseInt(cm[1], 10) : null;
+    return json({ ok: true, key, url: publicUrl, size }, 200, cors);
   }
 
   if (op === 'abort' && request.method === 'POST') {
     let body = {};
     try { body = await request.json(); } catch { /* 忽略 */ }
-    const up = env.MEDIA.resumeMultipartUpload(key, String(body.uploadId || uploadId));
-    await up.abort();
+    await ossCall(env, 'DELETE', key,
+      `uploadId=${encodeURIComponent(String(body.uploadId || uploadId))}`);
     return json({ ok: true }, 200, cors);
+  }
+
+  if (op === 'delete' && request.method === 'POST') {
+    const r = await ossCall(env, 'DELETE', key, '');
+    if (!r.ok && r.status !== 404) {
+      return json({ error: 'oss-error', detail: (await r.text()).slice(0, 300) }, 502, cors);
+    }
+    return json({ ok: true, key }, 200, cors);
   }
 
   return json({ error: 'bad op' }, 400, cors);
@@ -93,7 +178,7 @@ export default {
     };
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors });
 
-    // 管理上传：/upload/<slug> —— R2 分片上传 <slug>/film_web.mp4，全部需 X-Admin-Token
+    // 管理上传：/upload/<slug> —— OSS 直传控制面，全部需 X-Admin-Token
     const segs = url.pathname.replace(/^\/+|\/+$/g, '').split('/');
     if (segs[0] === 'upload') return handleUpload(request, env, url, segs[1] || '', cors);
 

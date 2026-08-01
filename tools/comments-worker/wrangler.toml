@@ -1,3 +1,4 @@
+account_id = "d5f8e64745441bab73eb5e85f8bc1490"
 name = "review-comments"
 main = "worker.js"
 compatibility_date = "2026-07-26"
@@ -12,7 +13,7 @@ workers_dev = true
 binding = "COMMENTS"
 id = "99c2028c678b4d4e9d8617b03868f62c"
 
-# R2 桶：网页预览视频（管理上传接口 /upload/<slug> 写入 <slug>/film_web.mp4）
-[[r2_buckets]]
-binding = "MEDIA"
-bucket_name = "guangai-media"
+# 阿里云 OSS：预览视频上传目标（/upload 接口只做签名控制面，浏览器数据面直连 OSS）
+[vars]
+OSS_BUCKET = "guanghe-ai"
+OSS_ENDPOINT = "oss-cn-chengdu.aliyuncs.com"

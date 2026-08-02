@@ -202,17 +202,33 @@ class OssClient:
         r = c.getresponse()
         return r.status, r.headers, r.read()
 
-    # ---- 高层操作 ----
+    # ---- 高层操作（传输错误/5xx 自动重试；Fatal/StaleUpload 原样上抛） ----
+    def _retry(self, fn, tries=4):
+        for i in range(tries):
+            try:
+                return fn()
+            except (Fatal, StaleUpload):
+                raise
+            except Exception as e:
+                self.drop_conn()
+                if i == tries - 1:
+                    raise Fatal(f"请求重试 {tries} 次仍失败: {type(e).__name__}: {e}")
+                time.sleep(min(15, 2 ** i) + random.random())
+
     def init_multipart(self, key):
-        status, _, body = self.request("POST", key, "uploads", ctype="video/mp4")
-        if status != 200:
-            raise Fatal(f"创建分片任务失败 HTTP {status}: {body[:300]!r}")
-        return _xml_text(body, "UploadId")
+        def op():
+            status, _, body = self.request("POST", key, "uploads", ctype="video/mp4")
+            if status != 200:
+                raise Fatal(f"创建分片任务失败 HTTP {status}: {body[:300]!r}")
+            return _xml_text(body, "UploadId")
+        return self._retry(op)
 
     def put_object_acl(self, key, acl="public-read"):
-        status, _, body = self.request("PUT", key, "acl", oss_headers=(("x-oss-object-acl", acl),))
-        if status != 200:
-            raise Fatal(f"设置对象 ACL 失败 HTTP {status}: {body[:300]!r}")
+        def op():
+            status, _, body = self.request("PUT", key, "acl", oss_headers=(("x-oss-object-acl", acl),))
+            if status != 200:
+                raise Fatal(f"设置对象 ACL 失败 HTTP {status}: {body[:300]!r}")
+        return self._retry(op)
 
     def complete_multipart(self, key, upload_id, parts):
         def quoted(e):
@@ -220,26 +236,33 @@ class OssClient:
         xml = ("<CompleteMultipartUpload>" +
                "".join(f"<Part><PartNumber>{n}</PartNumber><ETag>{quoted(e)}</ETag></Part>" for n, e in parts) +
                "</CompleteMultipartUpload>").encode()
-        status, _, body = self.request("POST", key, f"uploadId={quote(upload_id, safe='')}",
-                                       body=xml, ctype="application/xml")
-        if status == 404:
-            raise StaleUpload()
-        if status != 200:
-            raise Fatal(f"合并失败 HTTP {status}: {body[:300]!r}")
+
+        def op():
+            status, _, body = self.request("POST", key, f"uploadId={quote(upload_id, safe='')}",
+                                           body=xml, ctype="application/xml")
+            if status == 404:
+                raise StaleUpload()
+            if status != 200:
+                raise Fatal(f"合并失败 HTTP {status}: {body[:300]!r}")
+        return self._retry(op)
 
     def abort_multipart(self, key, upload_id):
-        self.request("DELETE", key, f"uploadId={quote(upload_id, safe='')}")
+        return self._retry(lambda: self.request("DELETE", key, f"uploadId={quote(upload_id, safe='')}"))
 
     def head(self, key):
-        status, headers, _ = self.request("HEAD", key)
-        if status != 200:
-            return None
-        return int(headers.get("Content-Length") or 0)
+        def op():
+            status, headers, _ = self.request("HEAD", key)
+            if status != 200:
+                return None
+            return int(headers.get("Content-Length") or 0)
+        return self._retry(op)
 
     def delete(self, key):
-        status, _, body = self.request("DELETE", key)
-        if status not in (204, 404):
-            raise Fatal(f"删除失败 HTTP {status}: {body[:300]!r}")
+        def op():
+            status, _, body = self.request("DELETE", key)
+            if status not in (204, 404):
+                raise Fatal(f"删除失败 HTTP {status}: {body[:300]!r}")
+        return self._retry(op)
 
 
 class Uploader:
@@ -433,7 +456,15 @@ class Uploader:
 
     def complete(self, st):
         parts = [(int(n), e) for n, e in sorted(st["parts"].items(), key=lambda x: int(x[0]))]
-        self.oss.complete_multipart(self.key, st["upload_id"], parts)
+        try:
+            self.oss.complete_multipart(self.key, st["upload_id"], parts)
+        except StaleUpload:
+            # 可能是“合并其实成功、响应在传输中丢失”：对象已存在且大小一致即视为成功，
+            # 避免误判 uploadId 失效而触发全量重传
+            remote = self.oss.head(self.key)
+            if remote is None or remote != self.size:
+                raise
+            print("合并响应丢失但远端已完成，按成功处理。", flush=True)
         self.oss.put_object_acl(self.key, "public-read")  # 预览对象需匿名可读（Init 不支持设 ACL）
         remote = self.oss.head(self.key)
         if remote is not None and remote != self.size:
